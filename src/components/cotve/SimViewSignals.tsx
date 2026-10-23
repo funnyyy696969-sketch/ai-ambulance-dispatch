@@ -14,6 +14,7 @@ function SignalCamera({ zoomRef }: { zoomRef: React.MutableRefObject<number> }) 
   const look = useRef(new THREE.Vector3());
 
   useFrame((_, dt) => {
+    if (!ctrl.graph) return; // no network built yet (pre-dispatch)
     const z = zoomRef.current;
     const next = ctrl.nextSignalNode();
     if (next) {
@@ -41,7 +42,7 @@ export default function SimViewSignals() {
   const status = useSimStore((s) => s.status);
   const ctrl = getController();
   const next = status && status.phase !== "idle" ? ctrl.nextSignalNode() : null;
-  const s = next ? ctrl.signals.states.get(next.nodeId) : null;
+  const s = next ? ctrl.signals?.states.get(next.nodeId) : null;
   const ambAxisColor = s
     ? ctrl.signals.colorOf(s, s.priorityAxis ?? s.greenAxis)
     : null;

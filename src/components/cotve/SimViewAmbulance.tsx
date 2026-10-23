@@ -18,6 +18,7 @@ function FollowCamera({ modeRef, zoomRef }: { modeRef: React.MutableRefObject<Ca
   const dir = useRef(new THREE.Vector3(1, 0, 0));
 
   useFrame((_, dt) => {
+    if (!ctrl.graph) return; // no network built yet (pre-dispatch)
     const a = ctrl.live.ambulance;
     if (a && a.edgeId !== null) {
       const e = ctrl.graph.edgesById.get(a.edgeId);

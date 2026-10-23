@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { useFrame } from "@react-three/fiber";
 import { getController } from "@/lib/cotve/simulation";
 import { buildingsForGraph } from "@/lib/cotve/network";
+import { useSimStore } from "@/lib/cotve/store";
 import type { RoadGraph } from "@/lib/cotve/types";
 
 const ROAD_WIDTH: Record<string, number> = {
@@ -70,9 +71,19 @@ function buildSignalHeads(graph: RoadGraph): { heads: SignalHead[]; poles: { x: 
   return { heads, poles };
 }
 
+/** Gate component: the 3D scene exists only once a road network has been
+ * built (a dispatch has run). Prevents the controller's graph from being
+ * read while it is still undefined. */
+export default function CityScene({ zoomRef }: { zoomRef: React.MutableRefObject<number> }) {
+  const networkReady = useSimStore((s) => s.networkReady);
+  const version = useSimStore((s) => s.simVersion);
+  if (!networkReady || !getController().graph) return null;
+  return <CitySceneInner key={version} zoomRef={zoomRef} />;
+}
+
 /** All static + dynamic city rendering. Reads the shared controller's live
  * frame imperatively every frame — no React re-renders in the hot path. */
-export default function CityScene({ zoomRef }: { zoomRef: React.MutableRefObject<number> }) {
+function CitySceneInner({ zoomRef }: { zoomRef: React.MutableRefObject<number> }) {
   const ctrl = getController();
   const graph = ctrl.graph;
 

@@ -46,6 +46,8 @@ export default function DispatchPanel() {
       const ctrl = getController();
       setStore({
         dispatching: false,
+        networkReady: true,
+        simVersion: useSimStore.getState().simVersion + 1,
         hospitals: res.candidates ?? [],
         selectedHospital: res.hospital ?? null,
         networkSource: ctrl.graph.source,
