@@ -427,13 +427,20 @@ export function ppoRoute(
       cand.push({ v: e.to, e: eId, relaxed: false });
     }
     if (cand.length === 0) {
-      // only revisiting options exist — allow backtrack but count it
-      for (const eId of outs) {
-        const e = ctx.graph.edgesById.get(eId)!;
-        if (e.to === prev) cand.push({ v: e.to, e: eId, relaxed: true });
-      }
-      if (cand.length === 0) cand.push({ v: ctx.graph.edgesById.get(outs[0])!.to, e: outs[0], relaxed: true });
+      // only revisiting options exist — escape by the LEAST-regressive move
+      // (closest to the destination), counted as a relaxed/invalid step
+      const visitedOpts = outs
+        .map((eId) => ctx.graph.edgesById.get(eId)!)
+        .map((e) => ({ v: e.to, e: e.id, relaxed: true }));
+      visitedOpts.sort((a, b) => {
+        const na = ctx.graph.nodesById.get(a.v)!;
+        const nb = ctx.graph.nodesById.get(b.v)!;
+        const nd = ctx.graph.nodesById.get(ctx.dest)!;
+        return Math.hypot(na.x - nd.x, na.y - nd.y) - Math.hypot(nb.x - nd.x, nb.y - nd.y);
+      });
+      cand.push(visitedOpts[0]);
       invalid++;
+      void prev;
     }
     const inputs: Float32Array[] = [];
     for (const c of cand) {

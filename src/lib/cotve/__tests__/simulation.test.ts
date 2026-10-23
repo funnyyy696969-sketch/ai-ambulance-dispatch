@@ -96,6 +96,32 @@ describe("full journey simulation (phases 2-6)", () => {
     expect(ctrl.live.signals).toBe(ctrl.signals.states);
   }, 60000);
 
+  it("restores a held signal even when the route no longer passes it (recalc / leg end)", () => {
+    const built = generateDemoGrid(center);
+    const ctrl = getController();
+    ctrl.setup(built.graph, built.projection);
+    const patient = { lat: center.lat + 0.0004, lng: center.lng + 0.0003 };
+    const hospital: HospitalCandidate = {
+      id: "t/3", name: "H2", lat: center.lat - 0.004, lng: center.lng - 0.003,
+      osmType: "node", tags: {}, hasEmergencyTag: "unknown", specialties: [], dataCompleteness: 0.2, demo: true,
+    };
+    expect(ctrl.dispatch({ patient, emergencyText: "stroke", emergencyKind: "stroke", hospital }, 150).ok).toBe(true);
+    // force a signal far from the route into an active-priority state
+    const routeNodes = new Set(ctrl.currentRoute!.nodePath);
+    const victim = ctrl.signals.states.get(
+      [...ctrl.signals.states.keys()].find((id) => !routeNodes.has(id))!,
+    )!;
+    victim.priority = "holding";
+    victim.phase = "green";
+    victim.priorityAxis = 0;
+    // one tick must kick it into restoring, a few more complete restoration
+    ctrl.tick(0.1);
+    expect(["restoring", "none"]).toContain(victim.priority);
+    for (let i = 0; i < 200; i++) ctrl.tick(0.1); // > yellow + all-red clearance
+    expect(victim.priority).toBe("none");
+    expect(ctrl.signals.restorations).toBeGreaterThan(0);
+  }, 60000);
+
   it("patient snap is reachable on the road graph (astar finds a route)", () => {
     const built = generateDemoGrid(center);
     const g = built.graph;

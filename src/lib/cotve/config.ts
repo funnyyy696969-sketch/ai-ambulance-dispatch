@@ -38,7 +38,7 @@ export const settings = {
   ppoEpisodesPerBatch: 6,
   ppoMaxStepsPerEpisode: 260,
   /** abandon PPO and fall back to A* after this many steps relative to A* path */
-  ppoStepFactorBeforeFallback: 3,
+  ppoStepFactorBeforeFallback: 5,
   seed: 42,
 } as const;
 

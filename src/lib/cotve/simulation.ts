@@ -312,6 +312,15 @@ export class SimulationController {
         }
       }
     }
+    // any signal holding/transition priority that is NOT on the remaining
+    // route anymore (route recalculated, or the leg just ended) must also
+    // restore — otherwise it would stay pre-empted forever
+    const onRouteAhead = new Set(approaching.map((a) => a.nodeId));
+    for (const s of this.signals.states.values()) {
+      if ((s.priority === "holding" || s.priority === "transition") && !onRouteAhead.has(s.nodeId) && !approaching.some((a) => a.nodeId === s.nodeId && a.passed)) {
+        approaching.push({ nodeId: s.nodeId, distanceM: -1, axis: 0, passed: true });
+      }
+    }
     this.signals.update(dt, approaching);
   }
 
