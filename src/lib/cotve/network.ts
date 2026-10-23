@@ -5,7 +5,7 @@ import type { LatLng, RoadEdge, RoadGraph, RoadNode } from "./types";
 /** Raw network handed over from the Convex Overpass action (or the demo
  * generator). Coordinates are lat/lng; projection happens here. */
 export interface RawOsmNetwork {
-  nodes: { id: number; lat: number; lng: number }[];
+  nodes: { id: number; lat: number; lng: number; signal?: boolean }[];
   edges: { from: number; to: number; oneway: boolean; type: string; maxspeed: number | null }[];
   source: "osm" | "demo-grid";
 }
@@ -46,8 +46,12 @@ export function buildGraph(raw: RawOsmNetwork, center: LatLng): BuiltGraph {
         lng: rn.lng,
         degree: 0,
         signalized: false,
+        // carry the REAL OSM traffic-signal tag through dedupe
+        ...(rn.signal ? { signalSource: "osm" as const } : {}),
       });
       coordKey.set(key, nid);
+    } else if (rn.signal) {
+      nodes[nid].signalSource = "osm";
     }
     idMap.set(rn.id, nid);
   }
@@ -147,7 +151,7 @@ export function buildGraph(raw: RawOsmNetwork, center: LatLng): BuiltGraph {
   for (const n of fNodes) out.set(n.id, []);
   for (const e of fEdges) out.get(e.from)!.push(e.id);
 
-  markSignalized(fNodes, fEdges);
+  markSignalized(fNodes, fEdges, raw.source);
 
   const graph: RoadGraph = {
     source: raw.source,
@@ -162,21 +166,42 @@ export function buildGraph(raw: RawOsmNetwork, center: LatLng): BuiltGraph {
   return { graph, projection: proj };
 }
 
-/** Degree >= 4 junctions are signalized; on large grids every other
- * high-degree node (checkerboard) to stay light on CPU/GPU. */
-function markSignalized(nodes: RoadNode[], edges: RoadEdge[]) {
-  const high = nodes.filter((n) => n.degree >= 4);
-  const limit = nodes.length > 120 ? nodes.length / 3 : nodes.length;
-  const chosen: RoadNode[] = [];
-  for (const n of high) {
-    if (chosen.length >= limit) break;
-    chosen.push(n);
-  }
-  const chosenSet = new Set(chosen.map((n) => n.id));
+/**
+ * Signalization policy:
+ *  - Nodes carrying a REAL `highway=traffic_signals` OSM tag are always
+ *    signalized with signalSource "osm".
+ *  - On top of those, on DEMO grids high-degree junctions without a tag are
+ *    marked "inferred" (labeled, never claimed to be real OSM signals).
+ *    On real OSM networks only actual signal tags are used, per spec §7.
+ */
+function markSignalized(nodes: RoadNode[], edges: RoadEdge[], source: "osm" | "demo-grid") {
+  // 1. REAL OSM signal tags always win
+  let realSignals = 0;
   for (const n of nodes) {
-    if (!chosenSet.has(n.id)) continue;
-    n.signalized = true;
-    // split incident edges into two axes by angle (NS vs EW)
+    if (n.signalSource === "osm") {
+      n.signalized = true;
+      realSignals++;
+    }
+  }
+  // 2. demo grids: infer signals at high-degree junctions (labeled "inferred")
+  const chosenSet = new Set<number>();
+  if (source === "demo-grid") {
+    const high = nodes.filter((n) => n.signalSource !== "osm" && n.degree >= 4);
+    const budget = Math.max(0, Math.floor(nodes.length / 3) - realSignals);
+    let count = 0;
+    for (const n of high) {
+      if (count >= budget) break;
+      chosenSet.add(n.id);
+      count++;
+    }
+  }
+  // 3. apply + compute signal axes for every signalized node
+  for (const n of nodes) {
+    if (chosenSet.has(n.id)) {
+      n.signalized = true;
+      n.signalSource = "inferred";
+    }
+    if (!n.signalized) continue;
     const axes: [number[], number[]] = [[], []];
     for (const e of edges) {
       if (e.from !== n.id) continue;

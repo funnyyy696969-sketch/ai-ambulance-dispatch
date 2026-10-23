@@ -74,11 +74,24 @@ export const fetchRoads = action({
     try {
       const q = `[out:json][timeout:25];way["highway"~"^(${ROAD_TYPES})$"](around:${radiusM},${lat},${lng});out geom tags;`;
       const data = await overpass(q);
+      // REAL OSM traffic-signal nodes in the same radius (second query)
+      const qSignals = `[out:json][timeout:25];node["highway"="traffic_signals"](around:${radiusM},${lat},${lng});out body;`;
+      const signalCoords = new Set<string>();
+      try {
+        const sigData = await overpass(qSignals);
+        for (const el of sigData.elements) {
+          if (el.lat !== undefined && el.lon !== undefined) {
+            signalCoords.add(`${el.lat.toFixed(5)}:${el.lon.toFixed(5)}`);
+          }
+        }
+      } catch {
+        // signals are an enhancement, not a requirement — absence is reported
+      }
       // dedupe nodes by ~2m grid so shared intersections merge
       const key = (la: number, lo: number) =>
         `${Math.round(la * 45000)}:${Math.round(lo * 45000)}`;
       const nodeIds = new Map<string, number>();
-      const nodes: { id: number; lat: number; lng: number }[] = [];
+      const nodes: { id: number; lat: number; lng: number; signal?: boolean }[] = [];
       const edges: { from: number; to: number; oneway: boolean; type: string; maxspeed: number | null }[] = [];
       for (const el of data.elements) {
         if (el.type !== "way" || !el.geometry) continue;
@@ -93,7 +106,13 @@ export const fetchRoads = action({
           if (id === undefined) {
             id = nodes.length;
             nodeIds.set(k, id);
-            nodes.push({ id, lat: pt.lat, lng: pt.lon });
+            nodes.push({
+              id,
+              lat: pt.lat,
+              lng: pt.lon,
+              // real `highway=traffic_signals` tag within ~1m of this node
+              ...(signalCoords.has(`${pt.lat.toFixed(5)}:${pt.lon.toFixed(5)}`) ? { signal: true } : {}),
+            });
           }
           ids.push(id);
         }
@@ -104,7 +123,16 @@ export const fetchRoads = action({
       if (nodes.length < 20) {
         return { ok: false as const, error: `Only ${nodes.length} road nodes in range — too sparse` };
       }
-      return { ok: true as const, network: { nodes, edges, source: "osm" as const } };
+      return {
+        ok: true as const,
+        network: { nodes, edges, source: "osm" as const },
+        meta: {
+          osmSignalNodes: signalCoords.size,
+          fetchedAt: Date.now(),
+          license: "ODbL 1.0 — © OpenStreetMap contributors",
+          endpoint: OVERPASS_URL,
+        },
+      };
     } catch (err) {
       return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
     }

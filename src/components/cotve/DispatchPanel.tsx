@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useAction } from "convex/react";
+import { useAction, useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { Siren, MapPin, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ export default function DispatchPanel() {
 
   const searchHospitals = useAction(api.osm.searchHospitals);
   const fetchRoads = useAction(api.osm.fetchRoads);
+  const saveOsmManifest = useMutation(api.simulations.saveOsmManifest);
 
   const onDispatch = async () => {
     if (!patient) {
@@ -35,6 +36,7 @@ export default function DispatchPanel() {
       const res = await runDispatchFlow(patient, emergency.trim(), {
         fetchHospitals: (a) => searchHospitals(a),
         fetchRoads: (a) => fetchRoads(a),
+        saveManifest: (a) => saveOsmManifest(a),
       });
       if (!res.ok) {
         toast.error(res.error ?? "Dispatch failed");

@@ -56,6 +56,21 @@ const schema = defineSchema(
       metrics: v.any(),
     }).index("by_created", ["createdAt"]),
 
+    /** real OSM acquisition records (Overpass provenance for each fetch) */
+    osmManifests: defineTable({
+      fetchedAt: v.number(),
+      kind: v.string(), // "osm-roads" | "osm-city-context"
+      endpoint: v.string(),
+      license: v.string(),
+      lat: v.optional(v.number()),
+      lng: v.optional(v.number()),
+      radiusM: v.optional(v.number()),
+      nodeCount: v.number(),
+      edgeCount: v.number(),
+      osmSignalNodes: v.number(),
+      studyCity: v.string(),
+    }).index("by_fetched", ["fetchedAt"]),
+
     // tableName: defineTable({
     //   ...
     //   // table fields

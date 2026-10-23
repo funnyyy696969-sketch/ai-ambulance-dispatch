@@ -27,6 +27,35 @@ export const save = mutation({
   },
 });
 
+export const saveOsmManifest = mutation({
+  args: {
+    kind: v.string(),
+    endpoint: v.string(),
+    license: v.string(),
+    lat: v.optional(v.number()),
+    lng: v.optional(v.number()),
+    radiusM: v.optional(v.number()),
+    nodeCount: v.number(),
+    edgeCount: v.number(),
+    osmSignalNodes: v.number(),
+    studyCity: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.insert("osmManifests", { fetchedAt: Date.now(), ...args });
+  },
+});
+
+export const listOsmManifests = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, { limit }) => {
+    return await ctx.db
+      .query("osmManifests")
+      .withIndex("by_fetched", (q) => q.gt("fetchedAt", 0))
+      .order("desc")
+      .take(limit ?? 6);
+  },
+});
+
 export const listRecent = query({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, { limit }) => {

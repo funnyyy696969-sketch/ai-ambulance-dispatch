@@ -141,7 +141,45 @@ this is stated in the UI). Metrics export to CSV and completed trips persist to 
 
 **No results are fabricated.** If an experiment hasn't run, the UI shows unavailable.
 
-## 9. Known limitations (deliberate, documented)
+## 9. Real datasets (verified sources, prepare-not-block)
+
+**Study city: Chennai, India** (user-selected; never invented). The pipeline uses real,
+verifiable datasets and strictly separates real observations from simulated experiments.
+
+### Verified registry (`src/lib/cotve/datasets/registry.ts` — shown in the app's **Datasets** tab)
+
+| Dataset | Access (verified) | Key verified facts |
+|---|---|---|
+| **IDD** (India Driving Dataset, IIIT-H) | **Account-gated**: register → login → download; no public URL exists | Detection: 46,588 images (31,569/10,225/4,794), VOC-like XML under `Annotations/` + `JPEGImages/`. Segmentation: polygon JSON under `gtFine/`, 10,003 images. Exact vehicle labels: `motorcycle, bicycle, autorickshaw, car, truck, bus, caravan, trailer, train, vehicle fallback`. License: **not publicly verifiable** — shown only inside the logged-in download flow |
+| **CityFlowV2** (AI City Challenge 2022 Track 1) | **Public download** with click-through license (no request form/password per the current access page) | 46 cameras, 16 intersections, 3.58 h, 6 scenarios (3 train/2 val/1 test), 313,931 boxes, 880 identities. Ranking metric **IDF1**. Submission lines: `cam obj frame x y w h xworld yworld`. **Turning-movement ratios / demand matrices: verified absent from documentation.** Released-GT line schema not documented — verified on disk after download |
+| **OpenStreetMap** (Chennai) | Public Overpass API | License **ODbL 1.0** (verified). Measured live (2026-10-23, exact city boundary): **535 hospital nodes, 393 traffic-signal nodes** — see `data/datasets/osm-chennai.json` |
+
+### What is automated vs. manual
+
+- `bun scripts/fetch-datasets.ts` — **ran live here**: confirms IDD's login wall and
+  CityFlowV2's public download page from the official endpoints, and extracted the real
+  Chennai counts above. `--osm` refreshes them; `--verify <dir>` verifies an actual
+  downloaded dataset (real files, real structure checks, ACTUAL class counts for IDD VOC
+  XML and gtFine polygons, GT line-schema report for CityFlow). Missing files abort
+  verification with a clear report — **no substitute files are ever generated**.
+- **IDD cannot be automated** (login-gated): register at idd.insaan.iiit.ac.in, download
+  manually, then run `bun scripts/fetch-datasets.ts --verify ./idd-detection`.
+- **CityFlowV2**: open the official 2022 Track 1 download page, click the link (that click
+  accepts the license), download manually, then run the same `--verify`.
+- **In-app**: every dispatch's real OSM fetch (roads, real `highway=traffic_signals` nodes,
+  hospitals) is recorded as a provenance manifest in Convex and shown in the Datasets tab.
+
+### Real-vs-simulated boundaries enforced in code
+
+- Road topology, hospital locations and **traffic-signal locations** are real OSM data
+  (signal nodes carry `signalSource: "osm"` and the dashboard labels them "OSM-verified").
+- Signal **timings/phases**, ambulance availability, patient pickup and congestion are
+  simulated and labeled simulated; turning ratios and demand matrices are stated as absent
+  from the gated distributions' documentation rather than fabricated.
+- Once you download IDD/CityFlow and run `--verify`, the manifest records actual class
+  counts and GT schema — perception/tracking metrics then report against real annotations.
+
+## 10. Known limitations (deliberate, documented)
 
 1. **Everything traffic-related is simulated** — vehicles, congestion, signal phases,
    ambulance availability, patient pickup. Nothing here dispatches a real ambulance.
@@ -157,7 +195,7 @@ this is stated in the UI). Metrics export to CSV and completed trips persist to 
 6. Edge geometry between OSM intersections is straight-lined (node-to-node), so 3D roads
    approximate curvature.
 
-## 10. Future improvements
+## 11. Future improvements
 
 - Server-side (Convex action) PPO training on larger graphs with persisted checkpoints.
 - Real OSM feature training data for the GNN (e.g. congestion datasets mapped onto networks).

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import DatasetsPanel from "./DatasetsPanel";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -156,10 +157,11 @@ export default function DashboardPanel() {
       </CardHeader>
       <CardContent className="flex-1 overflow-hidden">
         <Tabs value={tab} onValueChange={setTab} className="flex h-full flex-col">
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className="grid w-full grid-cols-6">
             <TabsTrigger value="status">Status</TabsTrigger>
             <TabsTrigger value="metrics">Metrics</TabsTrigger>
             <TabsTrigger value="hospitals">Hospitals</TabsTrigger>
+            <TabsTrigger value="datasets">Datasets</TabsTrigger>
             <TabsTrigger value="log">Log</TabsTrigger>
             <TabsTrigger value="history">History</TabsTrigger>
           </TabsList>
@@ -291,6 +293,10 @@ export default function DashboardPanel() {
                 </TableBody>
               </Table>
             )}
+          </TabsContent>
+
+          <TabsContent value="datasets" className="mt-3 h-[420px] overflow-y-auto">
+            <DatasetsPanel />
           </TabsContent>
 
           <TabsContent value="log" className="mt-3 overflow-y-auto">

@@ -15,6 +15,11 @@ export interface RoadNode {
   degree: number;
   /** true if this intersection is managed by a traffic signal */
   signalized: boolean;
+  /** where the signalization claim comes from:
+   *  osm      — node carries a real `highway=traffic_signals` tag
+   *  inferred — no tag; major junction inferred from topology (labeled)
+   *  demo     — demonstration grid */
+  signalSource?: "osm" | "inferred" | "demo";
   /** 0 = NS axis, 1 = EW axis (assigned by signal controller) */
   signalAxes?: [number[], number[]];
 }

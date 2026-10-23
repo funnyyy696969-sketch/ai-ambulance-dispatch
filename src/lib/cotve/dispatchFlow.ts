@@ -30,9 +30,26 @@ interface FlowDeps {
     | { ok: false; error: string }
   >;
   fetchRoads: (args: { lat: number; lng: number; radiusM: number }) => Promise<
-    | { ok: true; network: { nodes: { id: number; lat: number; lng: number }[]; edges: { from: number; to: number; oneway: boolean; type: string; maxspeed: number | null }[]; source: "osm" } }
+    | {
+        ok: true;
+        network: { nodes: { id: number; lat: number; lng: number; signal?: boolean }[]; edges: { from: number; to: number; oneway: boolean; type: string; maxspeed: number | null }[]; source: "osm" };
+        meta: { osmSignalNodes: number; fetchedAt: number; license: string; endpoint: string };
+      }
     | { ok: false; error: string }
   >;
+  /** provenance record for the real OSM fetch (Convex mutation) */
+  saveManifest: (args: {
+    kind: string;
+    endpoint: string;
+    license: string;
+    lat: number;
+    lng: number;
+    radiusM: number;
+    nodeCount: number;
+    edgeCount: number;
+    osmSignalNodes: number;
+    studyCity: string;
+  }) => Promise<unknown>;
 }
 
 /**
@@ -57,6 +74,20 @@ export async function runDispatchFlow(
     if (res.ok && res.network.nodes.length <= settings.maxOsmNodes) {
       built = buildGraph(res.network, patient);
       networkNote = `OpenStreetMap road network: ${built.graph.nodes.length} intersections, ${built.graph.edges.length} directed segments (~${settings.networkRadiusM} m around the patient)`;
+      const realSignals = built.graph.nodes.filter((n) => n.signalSource === "osm").length;
+      if (realSignals > 0) networkNote += `, ${realSignals} REAL OSM traffic-signal locations`;
+      await deps.saveManifest({
+        kind: "osm-roads",
+        endpoint: res.meta.endpoint,
+        license: res.meta.license,
+        lat: patient.lat,
+        lng: patient.lng,
+        radiusM: settings.networkRadiusM,
+        nodeCount: built.graph.nodes.length,
+        edgeCount: built.graph.edges.length,
+        osmSignalNodes: res.meta.osmSignalNodes,
+        studyCity: "Chennai, India",
+      }).catch(() => undefined);
     } else if (res.ok) {
       networkNote = `OSM network too dense for the lightweight engine (${res.network.nodes.length} nodes > ${settings.maxOsmNodes}) — using demonstration grid`;
     } else {

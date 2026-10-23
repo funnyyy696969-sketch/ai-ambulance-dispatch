@@ -1,0 +1,102 @@
+{
+  "generatedAt": "2026-10-23T14:40:02.545Z",
+  "studyCity": "Chennai, India",
+  "datasets": [
+    {
+      "id": "idd",
+      "title": "India Driving Dataset (IDD) — IIIT Hyderabad",
+      "access": "account-gated",
+      "license": {
+        "value": "unknown — terms are shown only inside the logged-in download flow; do not infer from the paper or mirrors",
+        "verified": false,
+        "note": "Verified that no public license text is reachable without login"
+      },
+      "officialSite": "https://idd.insaan.iiit.ac.in/",
+      "sources": [
+        {
+          "id": "idd-home",
+          "title": "IDD homepage",
+          "url": "https://idd.insaan.iiit.ac.in/"
+        },
+        {
+          "id": "idd-details",
+          "title": "Official dataset details (split counts)",
+          "url": "https://idd.insaan.iiit.ac.in/dataset/details/"
+        },
+        {
+          "id": "idd-download",
+          "title": "Official download endpoint (login-gated)",
+          "url": "https://idd.insaan.iiit.ac.in/dataset/download/"
+        },
+        {
+          "id": "autonue-code",
+          "title": "AutoNUE public-code (formats, labels, utilities)",
+          "url": "https://github.com/AutoNUE/public-code"
+        },
+        {
+          "id": "anue-labels",
+          "title": "Official label table anue_labels.py",
+          "url": "https://github.com/AutoNUE/public-code/blob/master/helpers/anue_labels.py"
+        },
+        {
+          "id": "idd-paper",
+          "title": "IDD paper",
+          "url": "https://arxiv.org/abs/1811.10200"
+        }
+      ]
+    },
+    {
+      "id": "cityflow-v2",
+      "title": "CityFlowV2 — AI City Challenge 2022 Track 1 (multi-camera vehicle tracking)",
+      "access": "public-clickthrough-license",
+      "license": {
+        "value": "click-through data license agreement (PDF linked on the download page: Dataset-License-AIC2022.pdf) — exact permitted use not certified; treat as research-restricted",
+        "verified": true,
+        "note": "Download link's click = acceptance is verified; full license text not extracted"
+      },
+      "officialSite": "https://www.aicitychallenge.org/2022-data-and-evaluation/",
+      "sources": [
+        {
+          "id": "aic-access",
+          "title": "AI City Challenge dataset access policy",
+          "url": "https://www.aicitychallenge.org/ai-city-challenge-dataset-access/"
+        },
+        {
+          "id": "aic-2022",
+          "title": "2022 Data and Evaluation (official facts)",
+          "url": "https://www.aicitychallenge.org/2022-data-and-evaluation/"
+        },
+        {
+          "id": "aic-2021",
+          "title": "2021 Data and Evaluation (separate counting track)",
+          "url": "https://www.aicitychallenge.org/2021-data-and-evaluation/"
+        },
+        {
+          "id": "aic-paper",
+          "title": "The 5th AI City Challenge paper",
+          "url": "https://arxiv.org/html/2104.12233v2"
+        }
+      ]
+    }
+  ],
+  "accessStatus": [
+    {
+      "id": "idd",
+      "title": "India Driving Dataset (IDD) — IIIT Hyderabad",
+      "url": "https://idd.insaan.iiit.ac.in/accounts/login/?next=/dataset/download/",
+      "checkedAt": "2026-10-23T14:40:04.438Z",
+      "httpStatus": 200,
+      "result": "ACCOUNT-GATED confirmed live: download endpoint requires registration/login — run the manual steps in the registry"
+    },
+    {
+      "id": "cityflow-v2",
+      "title": "CityFlowV2 — AI City Challenge 2022 Track 1 (multi-camera vehicle tracking)",
+      "url": "https://www.aicitychallenge.org/2022-data-and-evaluation/",
+      "checkedAt": "2026-10-23T14:40:04.936Z",
+      "httpStatus": 200,
+      "result": "PUBLIC DOWNLOAD page reachable: click-through license applies; open the page and download manually (link lives on the page)"
+    }
+  ],
+  "verification": [],
+  "osm": null
+}

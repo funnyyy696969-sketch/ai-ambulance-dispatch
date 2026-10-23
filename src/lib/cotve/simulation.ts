@@ -481,7 +481,9 @@ export class SimulationController {
       const next = this.nextSignalNode();
       if (next) {
         const s = this.signals.states.get(next.nodeId);
-        signalStatus = s ? `${s.phase} (axis ${s.greenAxis === 0 ? "N-S" : "E-W"} green)` : "unsignalized";
+        const src = this.graph.nodesById.get(next.nodeId)!.signalSource;
+        const srcLabel = src === "osm" ? "OSM-verified" : src === "inferred" ? "inferred" : "demo";
+        signalStatus = s ? `${s.phase} (${srcLabel} location)` : "unsignalized";
         priorityStatus = s?.priority === "none" ? "normal" : s ? `EMERGENCY ${s.priority}` : "—";
       }
     }
