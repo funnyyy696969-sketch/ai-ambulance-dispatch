@@ -1,0 +1,366 @@
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery } from "convex/react";
+import { api } from "../../convex/_generated/api";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Progress } from "@/components/ui/progress";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Download, RotateCcw } from "lucide-react";
+import { LineChart, Line, XAxis, YAxis, Tooltip as ReTooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid } from "recharts";
+import { useSimStore } from "@/lib/cotve/store";
+import { getController, modeLabel } from "@/lib/cotve/simulation";
+import { emergencyRules, type EmergencyKindLabel } from "@/lib/cotve/config";
+
+function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 py-1 text-sm">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      <span className={`text-right ${mono ? "font-mono text-xs" : ""}`}>{value}</span>
+    </div>
+  );
+}
+
+function fmt(s: number | null | undefined, digits = 1): string {
+  return s === null || s === undefined || s < 0 ? "—" : `${s.toFixed(digits)}s`;
+}
+
+function meters(m: number | null | undefined): string {
+  return m === null || m === undefined || m < 0 ? "—" : `${(m / 1000).toFixed(2)} km`;
+}
+
+export default function DashboardPanel() {
+  const [tab, setTab] = useState("status");
+  const status = useSimStore((s) => s.status);
+  const metrics = useSimStore((s) => s.metrics);
+  const events = useSimStore((s) => s.events);
+  const hospitals = useSimStore((s) => s.hospitals);
+  const selected = useSimStore((s) => s.selectedHospital);
+  const patient = useSimStore((s) => s.patient);
+  const emergencyText = useSimStore((s) => s.emergencyText);
+  const training = useSimStore((s) => s.training);
+  const networkInfo = useSimStore((s) => s.networkInfo);
+  const saved = useSimStore((s) => s.saved);
+  const setStore = useSimStore((s) => s.set);
+  const saveSim = useMutation(api.simulations.save);
+  const history = useQuery(api.simulations.listRecent, { limit: 8 });
+
+  const ctrl = getController();
+  const complete = status?.phase === "complete";
+
+  // persist the trip summary once, on completion
+  useEffect(() => {
+    if (!(complete && !saved && metrics && selected && patient)) return;
+    setStore({ saved: true });
+    saveSim({
+      emergencyText,
+      emergencyKind: classifyKind(emergencyText),
+      patientLat: patient.lat,
+      patientLng: patient.lng,
+      hospitalName: selected.name,
+      hospitalLat: selected.lat,
+      hospitalLng: selected.lng,
+      hospitalDemo: selected.demo,
+      networkSource: status?.networkSource ?? "—",
+      responseTimeSec: metrics.responseTime,
+      totalTimeSec: metrics.totalTime,
+      totalDistanceM: ctrl.routeDistanceTraveled,
+      routingMode: status?.routingMode ?? "—",
+      signalRequests: metrics.signalRequests,
+      signalActivations: metrics.signalActivations,
+      ppoEpisodes: metrics.ppoEpisodes,
+      metrics,
+    }).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [complete, saved]);
+
+  const rewardData = useMemo(
+    () => (training?.rewardCurve ?? metrics?.ppoRewardCurve ?? []).map((r, i) => ({ ep: i, reward: r })),
+    [training, metrics],
+  );
+
+  const baselineData = useMemo(() => {
+    const b = metrics?.baseline;
+    const actual = metrics?.totalTime ?? 0;
+    if (!b) return [];
+    return [
+      { name: "Dijkstra", est: b.dijkstraTime ?? 0, actual: 0 },
+      { name: "A*", est: b.astarTime ?? 0, actual: 0 },
+      { name: "GNN+PPO (sim)", est: actual, actual },
+    ];
+  }, [metrics]);
+
+  const downloadCsv = () => {
+    if (!metrics) return;
+    const rows: string[][] = [
+      ["metric", "value", "unit"],
+      ["emergency", emergencyText, ""],
+      ["hospital", selected?.name ?? "", ""],
+      ["network_source", status?.networkSource ?? "", ""],
+      ["response_time", metrics.responseTime.toFixed(1), "s"],
+      ["pickup_duration_simulated", metrics.pickupDuration.toFixed(1), "s"],
+      ["transport_time", metrics.transportTime.toFixed(1), "s"],
+      ["total_journey_time", metrics.totalTime.toFixed(1), "s"],
+      ["distance_traveled", ctrl.routeDistanceTraveled.toFixed(0), "m"],
+      ["signal_priority_requests", String(metrics.signalRequests), ""],
+      ["signal_priority_activations", String(metrics.signalActivations), ""],
+      ["signal_restorations", String(metrics.signalRestorations), ""],
+      ["relevant_intersections", String(metrics.relevantIntersections), ""],
+      ["ppo_episodes_quicktrain", String(metrics.ppoEpisodes), ""],
+      ["ppo_routing_mode", status?.routingMode ?? "", ""],
+      ["baseline_dijkstra_est_time", metrics.baseline?.dijkstraTime?.toFixed(1) ?? "", "s"],
+      ["baseline_astar_est_time", metrics.baseline?.astarTime?.toFixed(1) ?? "", "s"],
+      ["route_mode_to_patient", metrics.legs.toPatient ? modeLabel(getController().currentRoute?.mode ?? "ppo") : "", ""],
+    ];
+    const csv = rows.map((r) => r.map((c) => `"${c}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "cotve_trip_metrics.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <Card className="flex h-full flex-col">
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-base">Control dashboard</CardTitle>
+          <div className="flex items-center gap-2">
+            <Badge variant={phaseVariant(status?.phase)} className="font-mono text-[10px] uppercase">
+              {status?.phase ?? "standby"}
+            </Badge>
+            {complete && (
+              <>
+                <Button size="sm" variant="outline" onClick={downloadCsv}>
+                  <Download className="mr-1 h-3.5 w-3.5" /> CSV
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    ctrl.reset();
+                    setStore({ status: ctrl.status(), metrics: ctrl.metrics, saved: false, routeLatLngs: [] });
+                  }}
+                >
+                  <RotateCcw className="mr-1 h-3.5 w-3.5" /> Reset
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
+        {status && status.phase !== "idle" && status.phase !== "error" && (
+          <Progress value={status.progressPct} className="mt-2 h-1.5" />
+        )}
+      </CardHeader>
+      <CardContent className="flex-1 overflow-hidden">
+        <Tabs value={tab} onValueChange={setTab} className="flex h-full flex-col">
+          <TabsList className="grid w-full grid-cols-5">
+            <TabsTrigger value="status">Status</TabsTrigger>
+            <TabsTrigger value="metrics">Metrics</TabsTrigger>
+            <TabsTrigger value="hospitals">Hospitals</TabsTrigger>
+            <TabsTrigger value="log">Log</TabsTrigger>
+            <TabsTrigger value="history">History</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="status" className="mt-3 space-y-1 overflow-y-auto">
+            <Row label="Patient location" value={patient ? `${patient.lat.toFixed(5)}, ${patient.lng.toFixed(5)}` : "—"} mono />
+            <Row label="Emergency type" value={emergencyText || "—"} />
+            <Row label="Selected hospital" value={selected ? `${selected.name}${selected.demo ? " (DEMO)" : ""}` : "—"} />
+            <Row label="Ambulance start" value={useSimStore.getState().depotLatLng ? `${useSimStore.getState().depotLatLng!.lat.toFixed(5)}, ${useSimStore.getState().depotLatLng!.lng.toFixed(5)} (simulated depot)` : "—"} mono />
+            <Row label="Ambulance status" value={status?.ambulanceStatus ?? "—"} />
+            <Row label="Current route" value={status?.routeInfo ?? "—"} />
+            <Row label="Simulation time" value={fmt(status?.t ?? null)} mono />
+            <Row label="ETA → patient" value={fmt(status?.etaPatient ?? null)} mono />
+            <Row label="ETA → hospital" value={fmt(status?.etaHospital ?? null)} mono />
+            <Row label="Distance traveled" value={meters(status?.distanceTraveled ?? null)} mono />
+            <Row label="Next signal" value={status?.signalStatus ?? "—"} />
+            <Row label="Emergency priority" value={status?.priorityStatus ?? "—"} />
+            <Row label="Routing mode" value={status?.routingMode ?? "—"} />
+            {networkInfo && (
+              <p className="mt-2 rounded-md bg-muted/60 px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">{networkInfo}</p>
+            )}
+          </TabsContent>
+
+          <TabsContent value="metrics" className="mt-3 space-y-3 overflow-y-auto">
+            {metrics && metrics.totalTime > 0 ? (
+              <>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <MetricTile label="Response time" value={fmt(metrics.responseTime)} />
+                  <MetricTile label="Pickup (simulated)" value={fmt(metrics.pickupDuration)} />
+                  <MetricTile label="Transport time" value={fmt(metrics.transportTime)} />
+                  <MetricTile label="Total journey" value={fmt(metrics.totalTime)} />
+                  <MetricTile label="Signal wait" value={fmt((metrics.legs.toPatient?.signalWaitTime ?? 0) + (metrics.legs.toHospital?.signalWaitTime ?? 0))} />
+                  <MetricTile label="Route recalcs" value={String((metrics.legs.toPatient?.recalcs ?? 0) + (metrics.legs.toHospital?.recalcs ?? 0))} />
+                  <MetricTile label="Priority requests / activations" value={`${metrics.signalRequests} / ${metrics.signalActivations}`} />
+                  <MetricTile label="Restorations · intersections" value={`${metrics.signalRestorations} · ${metrics.relevantIntersections}`} />
+                </div>
+                <div className="h-40">
+                  <div className="mb-1 text-xs font-medium text-muted-foreground">Baseline comparison (estimated travel time, same network & initial congestion — not re-simulated)</div>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={baselineData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                      <YAxis tick={{ fontSize: 10 }} unit="s" width={54} />
+                      <ReTooltip formatter={(v: number | string) => `${Number(v).toFixed(1)} s`} />
+                      <Bar dataKey="est" fill="#f59e0b" radius={3} name="travel time (s)" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="h-40">
+                  <div className="mb-1 text-xs font-medium text-muted-foreground">
+                    PPO quick-train reward per batch ({training?.episodes ?? metrics.ppoEpisodes} episodes, {training?.wallMs ?? "—"} ms — demonstration scale)
+                  </div>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={rewardData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                      <XAxis dataKey="ep" tick={{ fontSize: 10 }} />
+                      <YAxis tick={{ fontSize: 10 }} width={54} />
+                      <ReTooltip formatter={(v: number | string) => Number(v).toFixed(2)} />
+                      <Line dataKey="reward" stroke="#22d3ee" dot={false} strokeWidth={1.5} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+                {metrics.baseline && (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Method</TableHead>
+                        <TableHead className="text-right">Est. time (s)</TableHead>
+                        <TableHead className="text-right">Distance (km)</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell>Dijkstra (baseline)</TableCell>
+                        <TableCell className="text-right font-mono">{fmt(metrics.baseline.dijkstraTime)}</TableCell>
+                        <TableCell className="text-right font-mono">{meters(metrics.baseline.dijkstraDistance)}</TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell>A* (baseline)</TableCell>
+                        <TableCell className="text-right font-mono">{fmt(metrics.baseline.astarTime)}</TableCell>
+                        <TableCell className="text-right font-mono">{meters(metrics.baseline.astarDistance)}</TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell>GNN + PPO (simulated, actual)</TableCell>
+                        <TableCell className="text-right font-mono">{fmt(metrics.totalTime)}</TableCell>
+                        <TableCell className="text-right font-mono">{meters(ctrl.routeDistanceTraveled)}</TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                )}
+                <p className="text-[11px] text-muted-foreground">
+                  All times come from the synthetic traffic simulation. They are not real-world performance and the baselines are evaluated on the initial congestion snapshot.
+                </p>
+              </>
+            ) : (
+              <p className="pt-6 text-center text-sm text-muted-foreground">Run a dispatch to collect metrics. Metrics shown here are unavailable until a simulation completes.</p>
+            )}
+          </TabsContent>
+
+          <TabsContent value="hospitals" className="mt-3 overflow-y-auto">
+            {hospitals.length === 0 ? (
+              <p className="pt-6 text-center text-sm text-muted-foreground">Hospitals appear here after dispatch (from OpenStreetMap; demo data is labeled).</p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Hospital</TableHead>
+                    <TableHead className="text-right">Road ETA</TableHead>
+                    <TableHead className="text-right">Spec.</TableHead>
+                    <TableHead className="text-right">Emerg.</TableHead>
+                    <TableHead className="text-right">Score</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {hospitals.map((h) => (
+                    <TableRow key={h.id} className={selected?.id === h.id ? "bg-primary/10" : ""}>
+                      <TableCell>
+                        <div className="max-w-52 truncate font-medium">{h.name}</div>
+                        {h.scores?.notes[0] && <div className="max-w-52 truncate text-[10px] text-muted-foreground">{h.scores.notes[0]}</div>}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs">{h.scores ? fmt(h.scores.roadTravelTime < 0 ? null : h.scores.roadTravelTime, 0) : "—"}</TableCell>
+                      <TableCell className="text-right font-mono text-xs">{h.scores ? h.scores.specialtyMatch.toFixed(1) : "—"}</TableCell>
+                      <TableCell className="text-right font-mono text-xs">
+                        {h.hasEmergencyTag === true ? "yes" : h.hasEmergencyTag === "unknown" ? "unk" : "no"}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs">{h.scores?.total.toFixed(2) ?? "—"}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </TabsContent>
+
+          <TabsContent value="log" className="mt-3 overflow-y-auto">
+            <div className="space-y-1 font-mono text-[11px] leading-relaxed">
+              {[...events].reverse().map((e, i) => (
+                <div key={i} className="flex gap-2">
+                  <span className="shrink-0 text-muted-foreground">{e.t.toFixed(1)}s</span>
+                  <span className="shrink-0 text-cyan-600">{e.kind}</span>
+                  <span>{e.message}</span>
+                </div>
+              ))}
+              {events.length === 0 && <p className="pt-4 text-center font-sans text-sm text-muted-foreground">No events yet.</p>}
+            </div>
+          </TabsContent>
+
+          <TabsContent value="history" className="mt-3 overflow-y-auto">
+            {history && history.length > 0 ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>When</TableHead>
+                    <TableHead>Emergency</TableHead>
+                    <TableHead>Hospital</TableHead>
+                    <TableHead className="text-right">Total</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {history.map((h) => (
+                    <TableRow key={h._id}>
+                      <TableCell className="text-xs">{new Date(h.createdAt).toLocaleTimeString()}</TableCell>
+                      <TableCell className="max-w-24 truncate text-xs">{h.emergencyText}</TableCell>
+                      <TableCell className="max-w-32 truncate text-xs">{h.hospitalName}{h.hospitalDemo ? " (demo)" : ""}</TableCell>
+                      <TableCell className="text-right font-mono text-xs">{h.totalTimeSec.toFixed(1)}s</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <p className="pt-6 text-center text-sm text-muted-foreground">Completed trips are stored in Convex and listed here.</p>
+            )}
+          </TabsContent>
+        </Tabs>
+      </CardContent>
+    </Card>
+  );
+}
+
+function MetricTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border bg-muted/40 px-2.5 py-2">
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="font-mono text-sm font-semibold">{value}</div>
+    </div>
+  );
+}
+
+function phaseVariant(phase?: string): "default" | "secondary" | "destructive" | "outline" {
+  switch (phase) {
+    case "complete": return "default";
+    case "error": return "destructive";
+    case "idle": return "secondary";
+    default: return "outline";
+  }
+}
+
+function classifyKind(text: string): string {
+  // reuse the shared classifier through config keyword lists
+  const s = text.toLowerCase();
+  for (const k of Object.keys(emergencyRules) as EmergencyKindLabel[]) {
+    if (emergencyRules[k].keywords.some((w) => s.includes(w))) return k;
+  }
+  return "general";
+}
