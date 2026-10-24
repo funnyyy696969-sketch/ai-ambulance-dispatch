@@ -55,7 +55,7 @@ function parseMaxspeed(v?: string) {
 
 async function osmDeps(lat: number, lng: number, radiusM: number) {
   return {
-    fetchRoads: async (_a: { lat: number; lng: number; radiusM: number }) => {
+    fetchRoads: async () => {
       try {
         const data = await overpass(`[out:json][timeout:30];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street)$"](around:${radiusM},${lat},${lng});out geom tags;`);
         const sigData = await overpass(`[out:json][timeout:25];node["highway"="traffic_signals"](around:${radiusM},${lat},${lng});out body;`);
@@ -84,7 +84,7 @@ async function osmDeps(lat: number, lng: number, radiusM: number) {
         return { ok: false as const, error: String(e) };
       }
     },
-    fetchHospitals: async (_a: { lat: number; lng: number; radiusM: number }) => {
+    fetchHospitals: async () => {
       try {
         const res = await overpass(`[out:json][timeout:25];(node["amenity"~"^(hospital|clinic)$"](around:6000,${lat},${lng});way["amenity"~"^(hospital|clinic)$"](around:6000,${lat},${lng}););out center tags;`);
         return { ok: true as const, elements: res.elements.map((el) => ({ type: el.type, id: el.id, lat: el.lat ?? el.center?.lat, lng: el.lon ?? el.center?.lon, tags: el.tags ?? {} })) };

@@ -23,9 +23,12 @@ visualized in two synchronized 3D screens.
 3. Enter the **disease / emergency type** (free text, e.g. "Heart emergency"). The system
    does **not** diagnose disease; text only steers hospital specialty matching.
 4. Press **DISPATCH AMBULANCE**:
-   - Road network is fetched from **OpenStreetMap (Overpass)** around the patient (~900 m).
-     If unavailable/too dense, a **demonstration grid network** is generated and clearly
-     labeled.
+   - The free-text emergency is first **classified** (critical / non-critical / uncertain) by
+     a documented, configurable keyword policy — **not** a clinical diagnosis (see §7a).
+   - Road network is fetched from **OpenStreetMap (Overpass)** around the patient (~900 m),
+     split at real junctions so every edge keeps its **true OSM geometry (curved polylines)**.
+     If the fetch is unavailable **or fails connectivity validation**, a **demonstration grid
+     network** is generated and clearly labeled.
    - Nearby **hospitals** are discovered from OSM (`amenity=hospital/clinic`), scored and
      ranked on the *actual road graph* (verified specialties, emergency tag, road ETA, data
      completeness). Unknown capabilities are shown as **unknown**, never invented. If OSM is
@@ -34,6 +37,9 @@ visualized in two synchronized 3D screens.
    - The **GNN** embeds the road network; the **PPO agent** is quick-trained in the browser
      (demonstration scale) and plans the route leg-by-leg with **masked, connected actions**.
    - **Dijkstra and A\*** run as comparison baselines on the same network & congestion.
+   - **Accident response**: the user may select a *simulated* accident blockage (or a real
+     accident record only if one is actually loaded — none is fabricated), which closes the
+     affected segment(s) and forces a **connected reroute** (see §7b).
 5. The journey runs through the shared simulation controller:
    **ambulance → patient → simulated pickup → hospital**, with **route-specific emergency
    signal priority** (only intersections on the active route are preempted; normal cycling
@@ -70,12 +76,14 @@ src/
 │   ├── ppo.ts              # ppo_agent + ppo_trainer (rollouts, clipped PPO update, quick-train)
 │   ├── routeManager.ts     # route_manager + route_validation (PPO planning, A* safe fallback)
 │   ├── hospitalDiscovery.ts# hospital discovery, parsing, honest scoring/ranking
-│   ├── signals.ts          # traffic_signal + emergency_priority (route-specific)
+│   ├── accidents.ts        # real-accident CSV loader (validated) + labeled simulated blockages
+│   ├── signals.ts          # traffic_signal + emergency_priority (route-specific, critical-only)
 │   ├── traffic.ts          # traffic_simulator (vehicles, congestion feedback)
-│   ├── simulation.ts       # simulation_controller (phases, metrics, shared clock)
+│   ├── simulation.ts       # simulation_controller (phases, metrics, shared clock, rerouting)
 │   ├── dispatchFlow.ts     # full dispatch pipeline orchestration
 │   ├── store.ts            # UI snapshot store
-│   └── __tests__/          # vitest suites (network, routing, PPO, signals, journey)
+│   ├── datasets/           # registry.ts + parsers.ts (verified real-dataset facts)
+│   └── __tests__/          # 5 vitest suites incl. the 14-case routing-correctness suite (§10)
 ├── components/cotve/       # MapPicker, DispatchPanel, DashboardPanel, CityScene, two 3D views
 ├── pages/                  # Landing.tsx, Dispatch.tsx (console), Auth.tsx
 └── convex/                 # osm.ts (Overpass actions), simulations.ts (history), schema.ts
@@ -86,7 +94,7 @@ src/
 ```bash
 bun install                 # install dependencies
 bun run dev                 # start the app (Freebuff manages the dev server & Convex)
-bun run test                # run the 23 automated tests (vitest, no network needed)
+bun run test                # run the 46 automated tests (vitest, no network needed)
 bun convex dev --once       # push Convex functions + regenerate types
 bun tsc -b --noEmit         # typecheck
 bun run lint                # eslint
@@ -97,8 +105,10 @@ Overpass API. If Overpass is unreachable the app keeps working on clearly-labele
 
 ## 5. Configuration (`src/lib/cotve/config.ts`)
 
-- `settings` — network radius, node caps, demo grid size, pickup duration, PPO train budget,
+`settings` — network radius, demo grid size, pickup duration, PPO train budget,
   recalibration interval, reproducible `seed`.
+- `criticalityConfig` / `criticalityRules` — the configurable **emergency-classification**
+  policy (critical / non-critical / uncertain) and its escalation switch (see §7a).
 - `emergencyRules` — emergency type → verified-tag keywords for specialty matching.
 - `trafficSettings` — vehicle count, congestion model, ambulance speed factors, gaps.
 - `signalSettings` — green/yellow/all-red timings, priority approach distance, hold times.
@@ -122,14 +132,49 @@ Overpass API. If Overpass is unreachable the app keeps working on clearly-labele
 - **Routing mode is always displayed**: `GNN+PPO`, `GNN+PPO (quick-trained)`, `A* fallback`,
   `Dijkstra`, `A*`.
 
+## 7a. Critical-emergency classification (critical-only priority)
+
+Every dispatch first classifies the free-text emergency via a **documented, configurable
+keyword policy** into one of three classes:
+
+- **critical** — a configured critical phrase matched (e.g. cardiac arrest, severe road
+  accident, stroke, major bleeding): dispatch, route, and **route-specific signal priority**
+  are activated.
+- **non-critical** — a configured minor phrase matched: dispatch proceeds but **signal
+  priority stays OFF**; the classification result is shown.
+- **uncertain** — no configured rule matched: an **uncertainty warning** is shown and priority
+  is **not** silently enabled. A configurable escalation policy (`uncertainAsCritical`) can
+  opt in to treating uncertain as critical, and is labeled when active.
+
+This is a keyword policy for traffic-priority routing research — it is **not** a clinical
+diagnosis, and the UI says so. Priority affects **only** the intersections on the active
+route (see §7).
+
 ## 7. Traffic signal priority (route-specific)
 
-Only intersections **on the active ambulance route** and only while the ambulance is within
-the approach distance receive priority. A request never jumps conflicting traffic to red:
+Only for a **critical** emergency (§7a), and only at intersections **on the active ambulance
+route** while the ambulance is within the approach distance, is priority requested. A request never jumps conflicting traffic to red:
 the current phase runs out through **yellow → all-red clearance**, then the ambulance axis
 is held on green; after the ambulance passes, the signal **restores** normal cycling. Off-
 route signals keep their normal green/yellow/all-red cycle and are never touched (verified
 by tests).
+
+## 7b. Accident integration & blockage rerouting
+
+Accidents are integrated in two strictly-separated ways:
+
+- **Real accident records** — loadable only from a genuinely-provided CSV via
+  `accidents.ts` (`loadRealAccidents`). Records are **validated** (finite coordinates, no
+  relocation, source + license recorded). India's official accident sources publish
+  **aggregate statistics, not per-crash coordinates**, so no real per-crash dataset ships
+  with the app; when none is supplied the UI states that plainly rather than inventing one.
+- **Simulated blockages** — clearly-labeled scenario events that close a road segment.
+
+When a segment is blocked (`SimulationController.blockEdge`), both directions close as a
+physical closure would, the affected edges are marked `blocked`, the route-integrity check
+fires, and the ambulance **reroutes from its next connected junction** (never teleporting,
+never entering the blocked road). If the blockage severs the only access, the app reports an
+honest **"route unavailable"** message instead of fabricating a path.
 
 ## 8. Metrics & evaluation
 
@@ -187,13 +232,15 @@ verifiable datasets and strictly separates real observations from simulated expe
    never inferred; missing tags are shown as *unknown* and treated as neutral in ranking.
 3. **GNN embeddings are untrained** (see §6); the PPO policy is quick-trained at
    demonstration scale in the browser, not a production training run.
-4. **OSM networks are capped** (~400 nodes). Denser urban extractions fall back to the
-   demonstration grid rather than slowing the engine — the fallback is announced in the UI
-   and event log.
+4. **OSM networks are radius-bounded** (~900 m around the patient). The network is built
+   only if it passes connectivity validation; otherwise the app falls back to the clearly
+   labeled demonstration grid. There is no hard node-count cap in the current engine.
 5. **Baselines are not re-simulated**: Dijkstra/A* rows compare *estimated* times under the
    initial congestion snapshot against the PPO leg's *simulated* actual time.
-6. Edge geometry between OSM intersections is straight-lined (node-to-node), so 3D roads
-   approximate curvature.
+6. **Roads are split at real junctions and keep their full OSM geometry** (curved polylines),
+   so routing, simulation, and 3D rendering all share the same geometry-true road layout.
+   Hospitals are selected only if they snap onto a road inside the built network; real OSM
+   hospitals that fall outside are excluded and reported (never silently substituted).
 
 ## 11. Future improvements
 

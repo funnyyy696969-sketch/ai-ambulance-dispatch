@@ -6,7 +6,6 @@ import {
 } from "./hospitalDiscovery";
 import { buildGraph, generateDemoGrid, snapToRoad, insertAccessNode, validateNetwork, nearestNode, type BuiltGraph } from "./network";
 import { astar } from "./baselines";
-import { toLocal } from "./geo";
 import { settings, classifyCriticality, criticalityConfig, type EmergencyKindLabel } from "./config";
 import { getController } from "./simulation";
 import type { Classification, HospitalCandidate, LatLng, NetworkValidation } from "./types";
@@ -138,19 +137,38 @@ export async function runDispatchFlow(
   }
 
   // ---- score candidates on the actual road graph (patient access -> hospital access) ----
+  // A REAL OSM hospital is selectable only if it snaps onto a road inside the
+  // built network — otherwise the route would end at a nearby junction rather
+  // than the hospital, breaking hospital-snapping correctness. Off-network real
+  // candidates are EXCLUDED and reported, never silently substituted.
+  // Demonstration hospitals (clearly labeled) keep the nearest-junction
+  // fallback, since they are placeholders outside the demo grid by design.
+  const excludedOffNetwork: HospitalCandidate[] = [];
+  const selectable: HospitalCandidate[] = [];
   for (const c of candidates) {
     const lx = (c.lng - built.projection.center.lng) * built.projection.mPerDegLng;
     const ly = (c.lat - built.projection.center.lat) * built.projection.mPerDegLat;
     const snap = snapToRoad(built.graph, built.projection, lx, ly, settings.maxSnapM * 4);
     c.access = snap;
+    if (!snap && !c.demo) {
+      excludedOffNetwork.push(c);
+      continue;
+    }
     const targetNode = snap ? built.graph.edgesById.get(snap.edgeId)!.from : nearestNode(built.graph, lx, ly);
     const path = astar(built.graph, patientAccessNode, targetNode);
     c.scores = scoreHospital(c, kind, path ? path.cost : null, path ? path.distance : null);
+    selectable.push(c);
   }
-  candidates.sort((a, b) => (b.scores?.total ?? 0) - (a.scores?.total ?? 0));
-  const best = candidates[0];
+  if (excludedOffNetwork.length) {
+    ctrl.log("hospital", `${excludedOffNetwork.length} of ${candidates.length} OSM hospital candidates lie outside the built ${settings.networkRadiusM} m road network and cannot be given a road-access point — excluded from selection (not substituted): ${excludedOffNetwork.slice(0, 3).map((c) => c.name).join("; ")}${excludedOffNetwork.length > 3 ? " …" : ""}`);
+  }
+  selectable.sort((a, b) => (b.scores?.total ?? 0) - (a.scores?.total ?? 0));
+  const best = selectable[0];
   if (!best) {
-    return { ok: false, error: "No suitable hospital could be found. Try another area and dispatch again.", graph: built, candidates: [] };
+    return {
+      ok: false, graph: built, candidates,
+      error: `All ${candidates.length} hospital candidates lie outside the built ${settings.networkRadiusM} m road network, so none could be assigned a road-access point. Select a patient location nearer a hospital, or increase the network radius.`,
+    };
   }
   ctrl.log("hospital", `Selected hospital: ${best.name} (score ${best.scores!.total.toFixed(2)})${usingDemoHospitals ? " — DEMO DATA" : ""}. ${best.scores!.notes.join(" ")}`);
 

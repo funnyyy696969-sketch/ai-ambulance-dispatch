@@ -6,7 +6,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildGraph, generateDemoGrid, snapToRoad, insertAccessNode,
-  validateNetwork, routePolyline, edgePoseAt, isTurnAllowed,
+  validateNetwork, routePolyline, isTurnAllowed,
   type RawOsmNetwork,
 } from "../network";
 import { astar, dijkstra } from "../baselines";
