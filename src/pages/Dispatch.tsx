@@ -64,6 +64,26 @@ export default function Dispatch() {
   const status = useSimStore((s) => s.status);
   const setStore = useSimStore((s) => s.set);
   const running = !getController().paused && status?.phase !== "complete";
+  const ctrl = getController();
+  const phase = status?.phase ?? "idle";
+  const speedKmh = (ctrl.live.ambulance?.speed ?? 0) * 3.6;
+
+  // bottom status panel values (single simulation state, 4 Hz sync)
+  const distPatient =
+    phase === "pickup" ? "0 m · at patient"
+    : phase === "to-patient" && status?.remainM != null ? `${status.remainM.toFixed(0)} m`
+    : phase === "to-hospital" || phase === "complete" ? "picked up"
+    : "—";
+  const distHospital =
+    phase === "to-hospital" && status?.remainM != null ? `${status.remainM.toFixed(0)} m`
+    : phase === "complete" ? "0 m · arrived"
+    : "—";
+  const pickupState =
+    phase === "pickup" ? "loading patient…"
+    : phase === "to-hospital" || phase === "complete" ? "completed"
+    : phase === "idle" ? "—" : "waiting";
+  const priorityActive =
+    !!status && status.priorityStatus.startsWith("EMERGENCY");
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
@@ -129,6 +149,65 @@ export default function Dispatch() {
           </div>
         </div>
       </main>
+
+      {/* bottom status panel: live emergency-response readout */}
+      <footer className="border-t border-border bg-card px-4 py-2">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs">
+          <StatusChip label="Status" value={status?.ambulanceStatus ?? "standby"} strong accent="text-red-600" />
+          <StatusChip label="Speed" value={`${speedKmh.toFixed(0)} km/h`} mono />
+          <StatusChip label="To patient" value={distPatient} mono />
+          <StatusChip
+            label="ETA patient"
+            value={status?.etaPatient != null ? `${status.etaPatient.toFixed(0)} s` : "—"}
+            mono
+          />
+          <StatusChip label="Pickup" value={pickupState} />
+          <StatusChip label="To hospital" value={distHospital} mono />
+          <StatusChip
+            label="ETA hospital"
+            value={status?.etaHospital != null ? `${status.etaHospital.toFixed(0)} s` : "—"}
+            mono
+          />
+          <StatusChip
+            label="Route"
+            value={status ? `${status.routingMode} · ${status.progressPct.toFixed(0)}%` : "—"}
+            mono
+          />
+          <StatusChip
+            label="Signal priority"
+            value={status?.priorityStatus ?? "—"}
+            accent={priorityActive ? "text-red-600 font-semibold" : undefined}
+          />
+          <StatusChip
+            label="Roads blocked"
+            value={`${status?.blockedRoads ?? 0} · ${status?.reroutes ?? 0} reroutes`}
+            mono
+          />
+        </div>
+      </footer>
     </div>
+  );
+}
+
+function StatusChip({
+  label,
+  value,
+  strong,
+  mono,
+  accent,
+}: {
+  label: string;
+  value: string;
+  strong?: boolean;
+  mono?: boolean;
+  accent?: string;
+}) {
+  return (
+    <span className="flex items-baseline gap-1.5 whitespace-nowrap">
+      <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</span>
+      <span className={`${mono ? "font-mono" : ""} ${strong ? "font-semibold" : ""} ${accent ?? "text-foreground"}`}>
+        {value}
+      </span>
+    </span>
   );
 }

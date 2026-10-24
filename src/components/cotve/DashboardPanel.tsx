@@ -57,7 +57,7 @@ function SimulateAccidentButton() {
     setStore({ blockVersion: useSimStore.getState().blockVersion + 1, blockedPolys: polys });
   };
   return (
-    <Button size="sm" variant="outline" disabled={!active} onClick={onClick} className="border-red-500/40 text-red-400 hover:bg-red-500/10">
+    <Button size="sm" variant="outline" disabled={!active} onClick={onClick} className="border-red-500/50 text-red-600 hover:bg-red-50">
       <TriangleAlert className="mr-1 h-3.5 w-3.5" /> Simulate accident
     </Button>
   );

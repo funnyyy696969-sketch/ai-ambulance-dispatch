@@ -3,7 +3,7 @@ import { useRef, useState } from "react";
 import * as THREE from "three";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Ambulance as AmbulanceIcon, Gauge, Timer } from "lucide-react";
-import CityScene from "./CityScene";
+import CityScene, { SKY_COLOR, SKY_FOG } from "./CityScene";
 import { getController, modeLabel } from "@/lib/cotve/simulation";
 import { useSimStore } from "@/lib/cotve/store";
 
@@ -66,12 +66,14 @@ export default function SimViewAmbulance() {
 
   return (
     <div
-      className="relative h-full w-full overflow-hidden rounded-lg border border-border bg-[#0b1220]"
+      className="relative h-full w-full overflow-hidden rounded-lg border border-border bg-[#cfe6f5]"
       onWheel={(e) => {
         zoomRef.current = Math.min(3, Math.max(0.4, zoomRef.current + e.deltaY * 0.001));
       }}
     >
       <Canvas dpr={[1, 1.5]} gl={{ antialias: false, powerPreference: "low-power" }} camera={{ fov: 55, near: 0.5, far: 4000, position: [0, 120, 200] }}>
+        <color attach="background" args={[SKY_COLOR]} />
+        <fog attach="fog" args={[SKY_COLOR, SKY_FOG[0], SKY_FOG[1]]} />
         <CityScene zoomRef={zoomRef} />
         <FollowCamera modeRef={modeRef} zoomRef={zoomRef} />
       </Canvas>

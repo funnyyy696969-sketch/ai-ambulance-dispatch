@@ -68,6 +68,8 @@ export interface ControllerStatus {
   routeInfo: string;
   etaPatient: number | null;
   etaHospital: number | null;
+  /** meters remaining on the CURRENT leg (patient or hospital) */
+  remainM: number | null;
   distanceTraveled: number;
   signalStatus: string;
   priorityStatus: string;
@@ -493,11 +495,13 @@ export class SimulationController {
     const route = this.currentRoute;
     let etaPatient: number | null = null;
     let etaHospital: number | null = null;
+    let remainM: number | null = null;
     if (a && route && a.edgeId !== null) {
       const e = this.graph.edgesById.get(a.edgeId)!;
       let remaining = Math.max(0, e.length - a.edgePos);
       for (let i = a.routeIdx + 1; i < route.edgeIds.length; i++) remaining += this.graph.edgesById.get(route.edgeIds[i])!.length;
       const v = Math.max(a.speed, 6);
+      remainM = remaining;
       if (this.leg === "to-patient") etaPatient = remaining / v;
       else etaHospital = remaining / v;
     }
@@ -531,6 +535,7 @@ export class SimulationController {
       routeInfo: route ? `${route.edgeIds.length} segments · ${totalLen.toFixed(0)} m · ${modeLabel(route.mode)}` : "—",
       etaPatient,
       etaHospital,
+      remainM,
       distanceTraveled: this.routeDistanceTraveled,
       signalStatus,
       priorityStatus,
