@@ -186,22 +186,66 @@ export function makeRng(seed: number) {
 
 /** ---------------- Realistic city rendering ----------------
  * Controlled, real-city building palette (NOT neon, NOT uniform). Colors are
- * muted creams/beiges/greys/pastels with a few terracotta/orange accents so
+ * muted creams/beiges/greys/pastels with terracotta/orange/blue accents so
  * the map reads like a real urban area rather than a cartoon. */
 export const buildingPalette: [number, number, number][] = [
-  [0.93, 0.90, 0.82], // light cream
-  [0.96, 0.96, 0.94], // white
-  [0.80, 0.81, 0.80], // light grey
-  [0.87, 0.82, 0.70], // beige
-  [0.75, 0.84, 0.89], // pale blue
-  [0.93, 0.89, 0.72], // soft yellow
-  [0.80, 0.55, 0.42], // terracotta
-  [0.72, 0.60, 0.48], // light brown
-  [0.86, 0.66, 0.46], // muted orange
-  [0.84, 0.78, 0.82], // pastel mauve
-  [0.78, 0.85, 0.76], // pastel green
-  [0.88, 0.85, 0.78], // warm sand
+  [0.93, 0.90, 0.82], // 0  light cream
+  [0.96, 0.96, 0.94], // 1  white
+  [0.80, 0.81, 0.80], // 2  light grey
+  [0.87, 0.82, 0.70], // 3  beige
+  [0.75, 0.84, 0.89], // 4  pale blue
+  [0.93, 0.89, 0.72], // 5  soft yellow
+  [0.80, 0.55, 0.42], // 6  terracotta
+  [0.72, 0.60, 0.48], // 7  light brown
+  [0.86, 0.66, 0.46], // 8  muted orange
+  [0.84, 0.78, 0.82], // 9  pastel mauve
+  [0.78, 0.85, 0.76], // 10 pastel green
+  [0.88, 0.85, 0.78], // 11 warm sand
+  [0.69, 0.78, 0.85], // 12 steel blue
+  [0.91, 0.78, 0.68], // 13 peach
+  [0.76, 0.73, 0.67], // 14 stone
+  [0.70, 0.66, 0.60], // 15 taupe
+  [0.95, 0.94, 0.90], // 16 ivory
+  [0.72, 0.82, 0.90], // 17 sky blue
+  [0.90, 0.72, 0.68], // 18 salmon
+  [0.82, 0.86, 0.78], // 19 sage
+  [0.93, 0.85, 0.71], // 20 apricot
+  [0.75, 0.58, 0.52], // 21 brick
+  [0.65, 0.72, 0.80], // 22 slate blue
+  [0.86, 0.80, 0.88], // 23 lilac
+  [0.73, 0.75, 0.76], // 24 stone grey
 ];
+
+/** Building TYPE -> allowed palette indices, so different OSM building types
+ * (and demo building types) render in visually distinct, appropriate colours:
+ * homes are warm creams, offices cool greys/blues, retail warm, etc. */
+export const buildingTypeColors: Record<string, number[]> = {
+  house: [0, 3, 11, 13, 20, 21],
+  residential: [0, 3, 11, 13, 20],
+  detached: [0, 3, 11, 21],
+  bungalow: [5, 11, 19, 20],
+  apartments: [2, 4, 12, 17, 22, 23],
+  commercial: [1, 2, 4, 12, 16, 24],
+  retail: [5, 8, 9, 13, 18, 20],
+  office: [2, 4, 12, 16, 22, 24],
+  industrial: [7, 14, 15, 21, 24],
+  warehouse: [7, 14, 15, 24],
+  hospital: [1, 4, 16, 17],
+  school: [6, 8, 19, 20],
+  university: [6, 8, 19, 20],
+  church: [6, 7, 14, 21],
+  hotel: [5, 8, 9, 18, 23],
+  civic: [1, 2, 16, 19],
+  public: [1, 2, 16, 19],
+};
+
+/** Pick a stable palette index for a building type (falls back to the whole
+ * palette when the type has no dedicated group). */
+export function colorForBuildingType(kind: string, rng: () => number): number {
+  const group = buildingTypeColors[kind];
+  if (!group || group.length === 0) return Math.floor(rng() * buildingPalette.length);
+  return group[Math.floor(rng() * group.length)];
+}
 
 export const buildingSettings = {
   /** cap on rendered footprints (integrated-graphics friendly) */

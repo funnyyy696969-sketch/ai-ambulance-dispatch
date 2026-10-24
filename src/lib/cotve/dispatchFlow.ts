@@ -5,7 +5,7 @@ import {
   demoHospitals,
 } from "./hospitalDiscovery";
 import { buildGraph, generateDemoGrid, snapToRoad, insertAccessNode, validateNetwork, nearestNode, type BuiltGraph } from "./network";
-import { buildFootprints, type RawBuilding } from "./buildings";
+import { buildFootprints, demoBuildings, type RawBuilding } from "./buildings";
 import { astar } from "./baselines";
 import { settings, classifyCriticality, criticalityConfig, emergencyRules, type EmergencyKindLabel } from "./config";
 import { getController } from "./simulation";
@@ -130,7 +130,11 @@ export async function runDispatchFlow(
       ctrl.log("buildings", `Building fetch failed (${err instanceof Error ? err.message : String(err)}) — 3D view shows roads only (no fabricated buildings)`);
     }
   } else if (built.graph.source === "demo-grid") {
-    ctrl.log("buildings", "Demonstration grid network — no real OSM buildings; scene shows the road graph only");
+    // Demonstration grid: SYNTHETIC buildings fill the blocks between the
+    // lattice roads (kept off the road corridors so routes never cross them).
+    // Clearly labeled synthetic — never claimed as real OSM data.
+    ctrl.buildings = demoBuildings(built.graph, patient);
+    ctrl.log("buildings", `Demonstration grid: ${ctrl.buildings.length} SYNTHETIC buildings (colorful, block-filling, off-road) — NOT real OSM data. Enable OSM for real footprints.`);
   }
 
   // ---- patient snapping to a REAL road access point ----

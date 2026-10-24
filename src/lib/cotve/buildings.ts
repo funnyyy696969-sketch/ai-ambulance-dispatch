@@ -1,6 +1,6 @@
-import { buildingPalette, buildingSettings, makeRng, settings } from "./config";
+import { buildingSettings, colorForBuildingType, makeRng, settings } from "./config";
 import { toLocal, type Projection } from "./geo";
-import type { BuildingFootprint, LocalPt, RoadGraph } from "./types";
+import type { BuildingFootprint, LatLng, LocalPt, RoadGraph } from "./types";
 
 /** Raw OSM building ways as delivered by the Convex fetchBuildings action. */
 export interface RawBuilding {
@@ -80,11 +80,79 @@ export function buildFootprints(
       height,
       heightSource,
       kind: b.building,
-      // controlled colourful palette: stable per building id
-      colorIdx: Math.floor(rng() * buildingPalette.length),
+      // type-based colour: homes warm, offices cool, etc. — varied, not random
+      colorIdx: colorForBuildingType(b.building, rng),
     });
   }
   return out;
+}
+
+/**
+ * SYNTHETIC buildings for the DEMONSTRATION grid fallback (clearly labeled,
+ * never claimed as real OSM). Fills each block BETWEEN the lattice roads with
+ * a few footprints, inset from the road centreline by a clearance margin so
+ * no building ever sits on or crosses a road (routes therefore never cross
+ * buildings). Colours come from the same type-based palette as real data, so
+ * the demo scene reads like a real colourful city.
+ */
+export function demoBuildings(
+  graph: RoadGraph,
+  center: LatLng,
+  seed = settings.seed,
+): BuildingFootprint[] {
+  const rng = makeRng(seed * 7 + 3);
+  const g = settings.demoGridSize;
+  const sp = settings.demoGridSpacingM;
+  const half = ((g - 1) * sp) / 2;
+  const clearance = 14; // metres from road centreline to any wall (covers curve jitter + road width)
+  const kinds = ["residential", "apartments", "house", "commercial", "retail", "office", "residential", "house"];
+  const out: BuildingFootprint[] = [];
+
+  // each block spans between grid lines; place 1–4 footprints inside it,
+  // keeping every wall >= clearance away from the surrounding roads.
+  for (let r = 0; r < g - 1; r++) {
+    for (let c = 0; c < g - 1; c++) {
+      const x0 = c * sp - half + clearance;
+      const x1 = (c + 1) * sp - half - clearance;
+      const y0 = r * sp - half + clearance;
+      const y1 = (r + 1) * sp - half - clearance;
+      if (x1 - x0 < 16 || y1 - y0 < 16) continue;
+      const cols = 1 + Math.floor(rng() * 2);
+      const rows = 1 + Math.floor(rng() * 2);
+      const cw = (x1 - x0) / cols;
+      const ch = (y1 - y0) / rows;
+      for (let i = 0; i < cols; i++) {
+        for (let j = 0; j < rows; j++) {
+          if (rng() < 0.18) continue; // leave some open (courtyard / lot)
+          const gap = 2.5;
+          const bx0 = x0 + i * cw + gap;
+          const bx1 = x0 + (i + 1) * cw - gap;
+          const by0 = y0 + j * ch + gap;
+          const by1 = y0 + (j + 1) * ch - gap;
+          if (bx1 - bx0 < 6 || by1 - by0 < 6) continue;
+          // slightly irregular quadrilateral so it is not a perfect box
+          const jx = () => (rng() - 0.5) * 3;
+          const ring: LocalPt[] = [
+            { x: bx0 + jx(), y: by0 + jx() },
+            { x: bx1 + jx(), y: by0 + jx() },
+            { x: bx1 + jx(), y: by1 + jx() },
+            { x: bx0 + jx(), y: by1 + jx() },
+          ];
+          const kind = kinds[Math.floor(rng() * kinds.length)];
+          const est = buildingSettings.estimatedHeights[kind] ?? buildingSettings.estimatedHeights.default;
+          out.push({
+            id: `demo/${r}-${c}-${i}-${j}`,
+            ring,
+            height: est * (0.8 + rng() * 0.7),
+            heightSource: "estimated",
+            kind,
+            colorIdx: colorForBuildingType(kind, rng),
+          });
+        }
+      }
+    }
+  }
+  return out.slice(0, buildingSettings.maxBuildings);
 }
 
 /** Polygon area (m², absolute) — used for footprint sanity checks. */

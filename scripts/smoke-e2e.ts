@@ -156,7 +156,10 @@ async function main() {
     const measured = ctrl.buildings.filter((b) => b.heightSource === "osm").length;
     check("real OSM building footprints loaded", ctrl.buildings.length > 0, `${ctrl.buildings.length} footprints, ${measured} measured height`);
   } else {
-    check("demo grid uses no fabricated buildings", ctrl.buildings.length === 0, `${ctrl.buildings.length} footprints (demo grid shows roads only)`);
+    // demo grid now fills blocks with SYNTHETIC (clearly-labeled, estimated-height,
+    // off-road) buildings so the 3D scene reads like a real colorful city.
+    const allSynthetic = ctrl.buildings.every((b) => b.heightSource === "estimated" && b.id.startsWith("demo/"));
+    check("demo grid fills with labeled synthetic buildings", ctrl.buildings.length > 0 && allSynthetic, `${ctrl.buildings.length} synthetic footprints (labeled, off-road)`);
   }
 
   const sigCount = ctrl.signals.states.size;

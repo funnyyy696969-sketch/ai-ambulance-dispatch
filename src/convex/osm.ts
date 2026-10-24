@@ -13,6 +13,13 @@ import { action } from "./_generated/server";
  */
 
 const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
+// Mirrors, tried in order with a small backoff — makes the road/building fetch
+// far less likely to fall back to the demo grid (which caused 2D/3D mismatch).
+const OVERPASS_MIRRORS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass-api.de/api/interpreter",
+];
 
 const ROAD_TYPES = "motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street";
 
@@ -28,13 +35,23 @@ interface OverpassEl {
 }
 
 async function overpass(query: string): Promise<{ elements: OverpassEl[] }> {
-  const res = await fetch(OVERPASS_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: `data=${encodeURIComponent(query)}`,
-  });
-  if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
-  return (await res.json()) as { elements: OverpassEl[] };
+  let lastErr: Error | null = null;
+  for (const url of OVERPASS_MIRRORS) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: `data=${encodeURIComponent(query)}`,
+      });
+      if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
+      return (await res.json()) as { elements: OverpassEl[] };
+    } catch (e) {
+      lastErr = e as Error;
+      // brief pause before the next mirror (429 rate limits clear quickly)
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+  }
+  throw lastErr ?? new Error("All Overpass endpoints failed");
 }
 
 function parseMaxspeed(v: string | undefined): number | null {
