@@ -8,6 +8,8 @@ import DashboardPanel from "@/components/cotve/DashboardPanel";
 import SimViewAmbulance from "@/components/cotve/SimViewAmbulance";
 import SimViewSignals from "@/components/cotve/SimViewSignals";
 import { getController } from "@/lib/cotve/simulation";
+import { routePolyline } from "@/lib/cotve/network";
+import { toLatLng } from "@/lib/cotve/geo";
 import { useSimStore } from "@/lib/cotve/store";
 
 /** Drives the shared SimulationController from requestAnimationFrame and
@@ -30,13 +32,23 @@ function useSimulationLoop() {
         const st = useSimStore.getState();
         if (ctrl.currentRoute !== lastRoute) {
           lastRoute = ctrl.currentRoute;
-          const pts: [number, number][] = ctrl.currentRoute
-            ? ctrl.currentRoute.nodePath.map((n) => {
-                const node = ctrl.graph.nodesById.get(n)!;
-                return [node.lat, node.lng] as [number, number];
+          // route polyline from the SAME edge geometry used for routing,
+          // movement and 3D rendering (map/sim consistency)
+          const pts: [number, number][] = ctrl.currentRoute && ctrl.projection
+            ? routePolyline(ctrl.graph, ctrl.currentRoute.edgeIds).map((p) => {
+                const ll = toLatLng(ctrl.projection, p.x, p.y);
+                return [ll.lat, ll.lng] as [number, number];
               })
             : [];
-          st.set({ routeLatLngs: pts });
+          st.set({
+            routeLatLngs: pts,
+            patientAccessLatLng: ctrl.patientAccessXY() && ctrl.projection
+              ? (() => { const p = ctrl.patientAccessXY()!; const ll = toLatLng(ctrl.projection, p.x, p.y); return [ll.lat, ll.lng] as [number, number]; })()
+              : null,
+            hospitalAccessLatLng: ctrl.hospitalAccessXY() && ctrl.projection
+              ? (() => { const p = ctrl.hospitalAccessXY()!; const ll = toLatLng(ctrl.projection, p.x, p.y); return [ll.lat, ll.lng] as [number, number]; })()
+              : null,
+          });
         }
         st.set({ status: ctrl.status(), metrics: ctrl.metrics, events: [...ctrl.events] });
       }

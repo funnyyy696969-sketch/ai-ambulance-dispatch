@@ -24,6 +24,7 @@ interface OverpassEl {
   center?: { lat: number; lon: number };
   tags?: Record<string, string>;
   geometry?: { lat: number; lon: number }[];
+  members?: { type: string; role: string; ref: number }[];
 }
 
 async function overpass(query: string): Promise<{ elements: OverpassEl[] }> {
@@ -72,9 +73,10 @@ export const fetchRoads = action({
   args: { lat: v.number(), lng: v.number(), radiusM: v.number() },
   handler: async (_ctx, { lat, lng, radiusM }) => {
     try {
-      const q = `[out:json][timeout:25];way["highway"~"^(${ROAD_TYPES})$"](around:${radiusM},${lat},${lng});out geom tags;`;
+      // 1. full way geometry (junction-or-not points preserved)
+      const q = `[out:json][timeout:30];way["highway"~"^(${ROAD_TYPES})$"](around:${radiusM},${lat},${lng});out geom tags;`;
       const data = await overpass(q);
-      // REAL OSM traffic-signal nodes in the same radius (second query)
+      // 2. REAL OSM traffic-signal nodes in the same radius
       const qSignals = `[out:json][timeout:25];node["highway"="traffic_signals"](around:${radiusM},${lat},${lng});out body;`;
       const signalCoords = new Set<string>();
       try {
@@ -87,47 +89,65 @@ export const fetchRoads = action({
       } catch {
         // signals are an enhancement, not a requirement — absence is reported
       }
-      // dedupe nodes by ~2m grid so shared intersections merge
-      const key = (la: number, lo: number) =>
-        `${Math.round(la * 45000)}:${Math.round(lo * 45000)}`;
-      const nodeIds = new Map<string, number>();
-      const nodes: { id: number; lat: number; lng: number; signal?: boolean }[] = [];
-      const edges: { from: number; to: number; oneway: boolean; type: string; maxspeed: number | null }[] = [];
-      for (const el of data.elements) {
-        if (el.type !== "way" || !el.geometry) continue;
-        const tags = el.tags ?? {};
-        const oneway = tags.oneway === "yes" || tags.oneway === "1";
-        const maxspeed = parseMaxspeed(tags.maxspeed);
-        const type = tags.highway ?? "residential";
-        const ids: number[] = [];
-        for (const pt of el.geometry) {
-          const k = key(pt.lat, pt.lon);
-          let id = nodeIds.get(k);
-          if (id === undefined) {
-            id = nodes.length;
-            nodeIds.set(k, id);
-            nodes.push({
-              id,
-              lat: pt.lat,
-              lng: pt.lon,
-              // real `highway=traffic_signals` tag within ~1m of this node
-              ...(signalCoords.has(`${pt.lat.toFixed(5)}:${pt.lon.toFixed(5)}`) ? { signal: true } : {}),
-            });
+      // 3. REAL turn restrictions (relations), via-node coords resolved in batch
+      const restrictions: { viaLat: number; viaLng: number; fromWay: number; toWay: number; restriction: string }[] = [];
+      try {
+        const qRel = `[out:json][timeout:25];relation["type"="restriction"]["restriction"~"^no_"](around:${radiusM},${lat},${lng});out body;`;
+        const relData = await overpass(qRel);
+        const viaNodeIds: number[] = [];
+        const parsed: { viaRef: number; from: number; to: number; restriction: string }[] = [];
+        for (const el of relData.elements) {
+          if (el.type !== "relation" || !el.members) continue;
+          const restriction = el.tags?.restriction;
+          if (!restriction || !restriction.startsWith("no_")) continue;
+          const via = el.members.find((m: { type: string; role: string }) => m.type === "node" && m.role === "via");
+          const from = el.members.find((m: { type: string; role: string }) => m.type === "way" && m.role === "from");
+          const to = el.members.find((m: { type: string; role: string }) => m.type === "way" && m.role === "to");
+          if (!via || !from || !to) continue;
+          viaNodeIds.push(via.ref);
+          parsed.push({ viaRef: via.ref, from: from.ref, to: to.ref, restriction });
+        }
+        if (viaNodeIds.length > 0) {
+          const qNodes = `[out:json][timeout:25];node(id:${viaNodeIds.join(",")});out body;`;
+          const nodeData = await overpass(qNodes);
+          const coords = new Map<number, { lat: number; lng: number }>();
+          for (const el of nodeData.elements) {
+            if (el.type === "node" && el.lat !== undefined && el.lon !== undefined) {
+              coords.set(el.id, { lat: el.lat, lng: el.lon });
+            }
           }
-          ids.push(id);
+          for (const p of parsed) {
+            const c = coords.get(p.viaRef);
+            if (c) restrictions.push({ viaLat: c.lat, viaLng: c.lng, fromWay: p.from, toWay: p.to, restriction: p.restriction });
+          }
         }
-        for (let i = 0; i < ids.length - 1; i++) {
-          edges.push({ from: ids[i], to: ids[i + 1], oneway, type, maxspeed });
-        }
+      } catch {
+        // restrictions are an enhancement — absence is reported in meta
       }
-      if (nodes.length < 20) {
-        return { ok: false as const, error: `Only ${nodes.length} road nodes in range — too sparse` };
+      // assemble RAW WAYS with full geometry (osm way id preserved)
+      const ways = data.elements
+        .filter((el) => el.type === "way" && el.geometry && el.geometry.length >= 2)
+        .map((el) => {
+          const tags = el.tags ?? {};
+          const lanes = tags.lanes ? Number.parseInt(tags.lanes, 10) : null;
+          return {
+            id: el.id,
+            nodes: el.geometry!.map((pt: { lat: number; lon: number }, i: number) => ({ id: i, lat: pt.lat, lng: pt.lon })),
+            oneway: tags.oneway === "yes" || tags.oneway === "1",
+            type: tags.highway ?? "residential",
+            maxspeed: parseMaxspeed(tags.maxspeed),
+            lanes: Number.isFinite(lanes as number) ? lanes : null,
+          };
+        });
+      if (ways.length === 0) {
+        return { ok: false as const, error: "No routable ways in range" };
       }
       return {
         ok: true as const,
-        network: { nodes, edges, source: "osm" as const },
+        network: { ways, signals: [...signalCoords].map((k) => { const [la, lo] = k.split(":").map(Number); return { lat: la, lng: lo }; }), restrictions, source: "osm" as const },
         meta: {
           osmSignalNodes: signalCoords.size,
+          turnRestrictions: restrictions.length,
           fetchedAt: Date.now(),
           license: "ODbL 1.0 — © OpenStreetMap contributors",
           endpoint: OVERPASS_URL,

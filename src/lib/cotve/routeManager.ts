@@ -1,7 +1,7 @@
 import { settings, makeRng } from "./config";
 import type { PlannedRoute, RoadGraph, RoutingMode } from "./types";
 import { astar, dijkstra } from "./baselines";
-import { edgeTravelTime, routeEstimatedTime, routeLength } from "./network";
+import { edgeTravelTime, isTurnAllowed, routeEstimatedTime, routeLength } from "./network";
 import { RoadGNN } from "./gnn";
 import {
   PpoAgent,
@@ -117,13 +117,18 @@ export function planRouteAstar(graph: RoadGraph, start: number, goal: number): P
   return makeRoute(graph, r.nodePath, r.edgeIds, "astar", r.nodePath.length, 0);
 }
 
-/** Verify every consecutive node pair is connected by a real directed edge. */
+/** Verify every consecutive node pair is connected by a real directed edge,
+ * the edge is not blocked, and each turn is allowed by real restrictions. */
 export function validatePath(graph: RoadGraph, nodePath: number[]): boolean {
   for (let i = 0; i < nodePath.length - 1; i++) {
     const a = nodePath[i];
     const b = nodePath[i + 1];
-    const ok = (graph.out.get(a) ?? []).some((eId) => graph.edgesById.get(eId)!.to === b);
-    if (!ok) return false;
+    const cand = (graph.out.get(a) ?? []).map((eId) => graph.edgesById.get(eId)!).find((e) => e.to === b);
+    if (!cand || cand.blocked) return false;
+    if (i > 0) {
+      const prev = (graph.out.get(nodePath[i - 1]) ?? []).map((eId) => graph.edgesById.get(eId)!).find((e) => e.to === a);
+      if (prev && !isTurnAllowed(graph, prev, cand)) return false;
+    }
   }
   return true;
 }

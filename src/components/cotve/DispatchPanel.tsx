@@ -12,10 +12,12 @@ import { toast } from "sonner";
 
 export default function DispatchPanel() {
   const [emergency, setEmergency] = useState("Heart emergency");
+  const [escalateUncertain, setEscalateUncertain] = useState(false);
   const patient = useSimStore((s) => s.patient);
   const dispatching = useSimStore((s) => s.dispatching);
   const training = useSimStore((s) => s.training);
   const status = useSimStore((s) => s.status);
+  const classification = useSimStore((s) => s.classification);
   const setStore = useSimStore((s) => s.set);
 
   const searchHospitals = useAction(api.osm.searchHospitals);
@@ -37,6 +39,7 @@ export default function DispatchPanel() {
         fetchHospitals: (a) => searchHospitals(a),
         fetchRoads: (a) => fetchRoads(a),
         saveManifest: (a) => saveOsmManifest(a),
+        uncertainAsCritical: escalateUncertain,
       });
       if (!res.ok) {
         toast.error(res.error ?? "Dispatch failed");
@@ -48,6 +51,7 @@ export default function DispatchPanel() {
         dispatching: false,
         networkReady: true,
         simVersion: useSimStore.getState().simVersion + 1,
+        classification: res.classification ?? null,
         hospitals: res.candidates ?? [],
         selectedHospital: res.hospital ?? null,
         networkSource: ctrl.graph.source,
@@ -60,7 +64,7 @@ export default function DispatchPanel() {
             }
           : null,
       });
-      toast.success(`Dispatched — ${res.hospital?.name ?? "hospital"} selected`);
+      toast.success(`Dispatched — ${res.classification?.criticality ?? "?"} · ${res.hospital?.name ?? "hospital"} selected`);
     } catch (err) {
       toast.error(`Dispatch failed: ${err instanceof Error ? err.message : String(err)}`);
       setStore({ dispatching: false });
@@ -92,7 +96,24 @@ export default function DispatchPanel() {
         <p className="text-[11px] text-muted-foreground">
           CoTV-E does not diagnose disease — this only steers hospital specialty matching.
         </p>
+        <label className="flex items-center gap-2 pt-1 text-[11px] text-muted-foreground">
+          <input type="checkbox" checked={escalateUncertain} onChange={(e) => setEscalateUncertain(e.target.checked)} className="accent-red-600" />
+          Escalation policy: treat UNCLASSIFIED emergencies as critical
+        </label>
       </div>
+      {classification && (
+        <div className={`rounded-md border px-3 py-2 text-xs ${
+          classification.criticality === "critical" ? "border-red-500/40 bg-red-500/10 text-red-300" :
+          classification.criticality === "non-critical" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" :
+          "border-amber-500/40 bg-amber-500/10 text-amber-300"
+        }`}>
+          <div className="font-semibold uppercase">{classification.criticality}</div>
+          <div className="mt-0.5 text-[11px] opacity-90">{classification.notes}</div>
+          {classification.criticality !== "critical" && (
+            <div className="mt-1 text-[11px]">Emergency signal priority stays OFF for this class.</div>
+          )}
+        </div>
+      )}
       <Button
         onClick={onDispatch}
         disabled={dispatching || status?.phase === "to-patient" || status?.phase === "pickup" || status?.phase === "to-hospital"}

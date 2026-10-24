@@ -1,6 +1,6 @@
 import { makeRng, settings, trafficSettings } from "./config";
 import type { RoadGraph } from "./types";
-import { edgeTravelTime } from "./network";
+import { edgeTravelTime, isTurnAllowed } from "./network";
 import { dist } from "./geo";
 
 /**
@@ -200,6 +200,7 @@ function runEpisode(agent: PpoAgent, ctx: RouteCtx, start: number, rng: () => nu
   const rewards: number[] = [];
   let node = start;
   const visited: number[] = [start];
+  const takenEdges: number[] = [];
   let totalReward = 0;
   const candBuf = new Float32Array(ACTOR_IN);
   const criticBuf = new Float32Array(CRITIC_IN);
@@ -216,11 +217,15 @@ function runEpisode(agent: PpoAgent, ctx: RouteCtx, start: number, rng: () => nu
     const prev = visited.length >= 2 ? visited[visited.length - 2] : -1;
     const recent = new Set(visited.slice(-6));
     const cand: { v: number; e: number; revisit: boolean; relaxed: boolean }[] = [];
+    const prevEdge = takenEdges.length ? ctx.graph.edgesById.get(takenEdges[takenEdges.length - 1])! : null;
     for (const eId of outs) {
       const e = ctx.graph.edgesById.get(eId)!;
+      if (e.blocked) continue;
+      if (prevEdge && !isTurnAllowed(ctx.graph, prevEdge, e)) continue;
       const relaxed = e.to === prev || recent.has(e.to);
       cand.push({ v: e.to, e: eId, revisit: recent.has(e.to), relaxed });
     }
+    if (cand.length === 0) break;
     const inputs: Float32Array[] = [];
     for (const c of cand) {
       buildCandidateInput(ctx, node, c.v, c.e, c.revisit, candBuf);
@@ -258,6 +263,7 @@ function runEpisode(agent: PpoAgent, ctx: RouteCtx, start: number, rng: () => nu
     totalReward += r;
     node = chosen.v;
     visited.push(node);
+    takenEdges.push(chosen.e);
     if (visited.filter((n) => n === node).length > 4) break; // loop guard
   }
   if (node !== ctx.dest && (rewards.length === 0 || rewards[rewards.length - 1] !== 10)) {
@@ -419,11 +425,14 @@ export function ppoRoute(
     steps++;
     const outs = ctx.graph.out.get(node) ?? [];
     if (outs.length === 0) break;
+    const prevEdge = edgeIds.length ? ctx.graph.edgesById.get(edgeIds[edgeIds.length - 1])! : null;
     const prev = nodePath.length >= 2 ? nodePath[nodePath.length - 2] : -1;
     const cand: { v: number; e: number; relaxed: boolean }[] = [];
     for (const eId of outs) {
       const e = ctx.graph.edgesById.get(eId)!;
+      if (e.blocked) continue; // blocked roads are never valid actions
       if (e.to === prev || visited.has(e.to)) continue; // mask: no backtrack / revisit
+      if (prevEdge && !isTurnAllowed(ctx.graph, prevEdge, e)) continue; // real restrictions
       cand.push({ v: e.to, e: eId, relaxed: false });
     }
     if (cand.length === 0) {
@@ -431,6 +440,7 @@ export function ppoRoute(
       // (closest to the destination), counted as a relaxed/invalid step
       const visitedOpts = outs
         .map((eId) => ctx.graph.edgesById.get(eId)!)
+        .filter((e) => !e.blocked && (!prevEdge || isTurnAllowed(ctx.graph, prevEdge, e)))
         .map((e) => ({ v: e.to, e: e.id, relaxed: true }));
       visitedOpts.sort((a, b) => {
         const na = ctx.graph.nodesById.get(a.v)!;
@@ -438,6 +448,7 @@ export function ppoRoute(
         const nd = ctx.graph.nodesById.get(ctx.dest)!;
         return Math.hypot(na.x - nd.x, na.y - nd.y) - Math.hypot(nb.x - nd.x, nb.y - nd.y);
       });
+      if (visitedOpts.length === 0) break; // fully blocked / restricted dead end
       cand.push(visitedOpts[0]);
       invalid++;
       void prev;

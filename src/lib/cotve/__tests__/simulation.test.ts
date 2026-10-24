@@ -1,12 +1,35 @@
 import { describe, it, expect } from "vitest";
-import { generateDemoGrid } from "../network";
-import { getController } from "../simulation";
+import { generateDemoGrid, snapToRoad, insertAccessNode, type BuiltGraph } from "../network";
+import { getController, type DispatchPayload } from "../simulation";
 import { astar, closestNodeTo } from "../baselines";
 import { scoreHospital, parseOverpassHospitals, classifyEmergency } from "../hospitalDiscovery";
 import { TrafficSimulator } from "../traffic";
-import type { HospitalCandidate } from "../types";
+import type { HospitalCandidate, LatLng } from "../types";
 
 const center = { lat: 28.6139, lng: 77.209 };
+
+/** Build a full dispatch payload with real snapping + access nodes. */
+function makePayload(built: BuiltGraph, patient: LatLng, hospital: HospitalCandidate): DispatchPayload {
+  const px = (patient.lng - built.projection.center.lng) * built.projection.mPerDegLng;
+  const py = (patient.lat - built.projection.center.lat) * built.projection.mPerDegLat;
+  const snap = snapToRoad(built.graph, built.projection, px, py, 200)!;
+  const patientAccessNode = insertAccessNode(built.graph, snap, "patient-access");
+  const hx = (hospital.lng - built.projection.center.lng) * built.projection.mPerDegLng;
+  const hy = (hospital.lat - built.projection.center.lat) * built.projection.mPerDegLat;
+  const hsnap = snapToRoad(built.graph, built.projection, hx, hy, 500)!;
+  const hospitalAccessNode = insertAccessNode(built.graph, hsnap, "hospital-access");
+  return {
+    patient, emergencyText: "Heart emergency", emergencyKind: "cardiac", hospital,
+    patientAccessNode, hospitalAccessNode, patientAccess: snap, hospitalAccess: hsnap,
+    classification: { criticality: "critical", matchedRule: "cardiac emergency", notes: "test" },
+  };
+}
+
+const TEST_HOSPITAL = (lat: number, lng: number): HospitalCandidate => ({
+  id: "t/2", name: "Test Hospital", lat, lng,
+  osmType: "node", tags: { amenity: "hospital" }, hasEmergencyTag: true,
+  specialties: ["cardiology"], dataCompleteness: 0.5, demo: true,
+});
 
 describe("hospital scoring honesty", () => {
   it("never treats unknown emergency capability as confirmed", () => {
@@ -62,12 +85,8 @@ describe("full journey simulation (phases 2-6)", () => {
     ctrl.setup(built.graph, built.projection);
 
     const patient = { lat: center.lat + 0.0005, lng: center.lng + 0.0005 };
-    const hospital: HospitalCandidate = {
-      id: "t/2", name: "Test Hospital", lat: center.lat + 0.004, lng: center.lng - 0.004,
-      osmType: "node", tags: { amenity: "hospital" }, hasEmergencyTag: true,
-      specialties: ["cardiology"], dataCompleteness: 0.5, demo: true,
-    };
-    const res = ctrl.dispatch({ patient, emergencyText: "Heart emergency", emergencyKind: "cardiac", hospital }, 250);
+    const hospital = TEST_HOSPITAL(center.lat + 0.004, center.lng - 0.004);
+    const res = ctrl.dispatch(makePayload(built, patient, hospital), 250);
     expect(res.ok).toBe(true);
     expect(ctrl.phase).toBe("to-patient");
     expect(ctrl.currentRoute).not.toBeNull();
@@ -85,9 +104,10 @@ describe("full journey simulation (phases 2-6)", () => {
     expect(ctrl.metrics.legs.toPatient!.distance).toBeGreaterThan(0);
     expect(ctrl.metrics.legs.toHospital!.distance).toBeGreaterThan(0);
 
-    // ambulance must have stayed on connected roads: final node == hospital node
+    // ambulance must have stayed on connected roads: final node == hospital ACCESS node
     const hxy = { x: (hospital.lng - built.projection.center.lng) * built.projection.mPerDegLng, y: (hospital.lat - built.projection.center.lat) * built.projection.mPerDegLat };
-    expect(ctrl.hospitalNode).toBe(closestNodeTo(built.graph, hxy.x, hxy.y));
+    expect(ctrl.graph.nodesById.get(ctrl.hospitalNode)!.isAccess).toBe(true);
+    expect(closestNodeTo(built.graph, hxy.x, hxy.y)).toBeDefined();
     expect(ctrl.metrics.baseline).not.toBeNull();
     expect(ctrl.metrics.baseline!.astarTime).toBeGreaterThan(0);
 
@@ -101,11 +121,11 @@ describe("full journey simulation (phases 2-6)", () => {
     const ctrl = getController();
     ctrl.setup(built.graph, built.projection);
     const patient = { lat: center.lat + 0.0004, lng: center.lng + 0.0003 };
-    const hospital: HospitalCandidate = {
-      id: "t/3", name: "H2", lat: center.lat - 0.004, lng: center.lng - 0.003,
-      osmType: "node", tags: {}, hasEmergencyTag: "unknown", specialties: [], dataCompleteness: 0.2, demo: true,
-    };
-    expect(ctrl.dispatch({ patient, emergencyText: "stroke", emergencyKind: "stroke", hospital }, 150).ok).toBe(true);
+    const hospital = TEST_HOSPITAL(center.lat - 0.004, center.lng - 0.003);
+    const payload = makePayload(built, patient, hospital);
+    payload.emergencyText = "stroke";
+    payload.emergencyKind = "stroke";
+    expect(ctrl.dispatch(payload, 150).ok).toBe(true);
     // force a signal far from the route into an active-priority state
     const routeNodes = new Set(ctrl.currentRoute!.nodePath);
     const victim = ctrl.signals.states.get(

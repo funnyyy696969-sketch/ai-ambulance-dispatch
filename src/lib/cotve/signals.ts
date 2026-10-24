@@ -24,6 +24,10 @@ export class SignalController {
   restorations = 0;
   private graph: RoadGraph;
 
+  /** critical-only priority: when false, no intersection is ever preempted
+   * (non-critical / uncertain emergencies run normal signal cycles) */
+  priorityEnabled = true;
+
   constructor(graph: RoadGraph) {
     this.graph = graph;
     for (const n of graph.nodes) {
@@ -36,7 +40,23 @@ export class SignalController {
           priority: "none",
           priorityAxis: null,
           passedAt: null,
+          priorityEnabled: true,
         });
+      }
+    }
+  }
+
+  /** Apply the criticality policy to every signal state. */
+  setPriorityEnabled(enabled: boolean) {
+    this.priorityEnabled = enabled;
+    for (const s of this.states.values()) {
+      s.priorityEnabled = enabled;
+      if (!enabled && s.priority !== "none") {
+        // abort any active preemption safely: yellow -> all-red -> normal
+        s.priority = "restoring";
+        s.phase = "yellow";
+        s.tInPhase = 0;
+        s.priorityAxis = null;
       }
     }
   }
@@ -96,6 +116,12 @@ export class SignalController {
     const approachingIds = new Set(approaching.map((a) => a.nodeId));
     for (const s of this.states.values()) {
       const app = approaching.find((a) => a.nodeId === s.nodeId);
+      if (!this.priorityEnabled && s.priority !== "restoring") {
+        // critical-only priority: non-critical runs pure normal cycling,
+        // but an in-flight restoration is still allowed to finish
+        this.tickNormal(s, dt);
+        continue;
+      }
       switch (s.priority) {
         case "none": {
           if (app && !app.passed && app.distanceM <= signalSettings.priorityApproachM) {

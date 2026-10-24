@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { generateDemoGrid, nearestNode, validateGraphConnectivity } from "../network";
+import { generateDemoGrid, nearestNode, validateNetwork } from "../network";
 import { dijkstra, astar } from "../baselines";
 import { RoadGNN } from "../gnn";
 import { PpoAgent, quickTrain, ppoRoute, graphMaxDist, buildCandidateInput, type RouteCtx } from "../ppo";
@@ -16,7 +16,8 @@ describe("road graph (demo grid, no external map)", () => {
   it("builds a connected grid with directed edges", () => {
     expect(g.nodes.length).toBe(settings.demoGridSize * settings.demoGridSize);
     expect(g.edges.length).toBeGreaterThan(0);
-    expect(validateGraphConnectivity(g)).toBe(true);
+    expect(validateNetwork(g).components).toBe(1);
+    expect(validateNetwork(g).ok).toBe(true);
   });
 
   it("signalizes interior high-degree intersections", () => {

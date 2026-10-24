@@ -1,20 +1,17 @@
-import { api } from "../../convex/_generated/api";
-import type { HospitalCandidate, LatLng } from "./types";
 import {
   classifyEmergency,
   parseOverpassHospitals,
   scoreHospital,
   demoHospitals,
 } from "./hospitalDiscovery";
-import { buildGraph, generateDemoGrid, type BuiltGraph } from "./network";
-import { astar, closestNodeTo } from "./baselines";
+import { buildGraph, generateDemoGrid, snapToRoad, insertAccessNode, validateNetwork, nearestNode, type BuiltGraph } from "./network";
+import { astar } from "./baselines";
 import { toLocal } from "./geo";
-import { settings } from "./config";
+import { settings, classifyCriticality, criticalityConfig, type EmergencyKindLabel } from "./config";
 import { getController } from "./simulation";
-import type { EmergencyKindLabel } from "./config";
+import type { Classification, HospitalCandidate, LatLng, NetworkValidation } from "./types";
 import type { QuickTrainResult } from "./ppo";
 
-/** Result handed to the UI after the full dispatch pipeline. */
 export interface DispatchFlowResult {
   ok: boolean;
   error?: string;
@@ -22,6 +19,8 @@ export interface DispatchFlowResult {
   hospital?: HospitalCandidate;
   candidates?: HospitalCandidate[];
   training?: QuickTrainResult;
+  classification?: Classification;
+  validation?: NetworkValidation;
 }
 
 interface FlowDeps {
@@ -32,31 +31,31 @@ interface FlowDeps {
   fetchRoads: (args: { lat: number; lng: number; radiusM: number }) => Promise<
     | {
         ok: true;
-        network: { nodes: { id: number; lat: number; lng: number; signal?: boolean }[]; edges: { from: number; to: number; oneway: boolean; type: string; maxspeed: number | null }[]; source: "osm" };
-        meta: { osmSignalNodes: number; fetchedAt: number; license: string; endpoint: string };
+        network: {
+          ways: { id: number; nodes: { id: number; lat: number; lng: number }[]; oneway: boolean; type: string; maxspeed: number | null; lanes: number | null }[];
+          signals: { lat: number; lng: number }[];
+          restrictions: { viaLat: number; viaLng: number; fromWay: number; toWay: number; restriction: string }[];
+          source: "osm";
+        };
+        meta: { osmSignalNodes: number; turnRestrictions: number; fetchedAt: number; license: string; endpoint: string };
       }
     | { ok: false; error: string }
   >;
-  /** provenance record for the real OSM fetch (Convex mutation) */
   saveManifest: (args: {
-    kind: string;
-    endpoint: string;
-    license: string;
-    lat: number;
-    lng: number;
-    radiusM: number;
-    nodeCount: number;
-    edgeCount: number;
-    osmSignalNodes: number;
-    studyCity: string;
+    kind: string; endpoint: string; license: string; lat: number; lng: number; radiusM: number;
+    nodeCount: number; edgeCount: number; osmSignalNodes: number; studyCity: string;
   }) => Promise<unknown>;
+  /** configured escalation policy for uncertain classification */
+  uncertainAsCritical?: boolean;
 }
 
 /**
- * Runs the full Phase-2 dispatch pipeline:
- *  roads -> graph -> hospitals -> scoring -> best hospital -> ambulance ->
- *  PPO quick-train -> GNN embeddings -> route -> simulation start.
- * Every degraded path is labeled, never silently faked.
+ * Full dispatch pipeline (Phase 2):
+ *  road network (real OSM, geometry preserved) -> connectivity validation ->
+ *  patient snapping to a real road access point -> hospital discovery/ranking
+ *  on the road graph -> hospital access insertion -> criticality
+ *  classification -> PPO quick-train + GNN routing -> simulation start.
+ * Every degraded path is labeled; nothing is fabricated.
  */
 export async function runDispatchFlow(
   patient: LatLng,
@@ -66,32 +65,33 @@ export async function runDispatchFlow(
   const ctrl = getController();
   const kind: EmergencyKindLabel = classifyEmergency(emergencyText);
 
-  // ---- road network (OSM, fallback demo grid, clearly labeled) ----
+  // ---- criticality classification (documented keyword policy) ----
+  const base = classifyCriticality(emergencyText);
+  const classification: Classification = deps.uncertainAsCritical && base.criticality === "uncertain"
+    ? { ...base, notes: `${base.notes} — escalation policy ACTIVE: uncertain treated as critical` }
+    : base;
+
+  // ---- road network (real OSM with geometry; demo-grid fallback labeled) ----
   let built: BuiltGraph | null = null;
   let networkNote: string | null = null;
   try {
     const res = await deps.fetchRoads({ lat: patient.lat, lng: patient.lng, radiusM: settings.networkRadiusM });
-    if (res.ok && res.network.nodes.length <= settings.maxOsmNodes) {
+    if (res.ok && res.network.ways.length > 0) {
       built = buildGraph(res.network, patient);
-      networkNote = `OpenStreetMap road network: ${built.graph.nodes.length} intersections, ${built.graph.edges.length} directed segments (~${settings.networkRadiusM} m around the patient)`;
-      const realSignals = built.graph.nodes.filter((n) => n.signalSource === "osm").length;
-      if (realSignals > 0) networkNote += `, ${realSignals} REAL OSM traffic-signal locations`;
-      await deps.saveManifest({
-        kind: "osm-roads",
-        endpoint: res.meta.endpoint,
-        license: res.meta.license,
-        lat: patient.lat,
-        lng: patient.lng,
-        radiusM: settings.networkRadiusM,
-        nodeCount: built.graph.nodes.length,
-        edgeCount: built.graph.edges.length,
-        osmSignalNodes: res.meta.osmSignalNodes,
-        studyCity: "Chennai, India",
-      }).catch(() => undefined);
-    } else if (res.ok) {
-      networkNote = `OSM network too dense for the lightweight engine (${res.network.nodes.length} nodes > ${settings.maxOsmNodes}) — using demonstration grid`;
+      const v = validateNetwork(built.graph);
+      if (!v.ok) {
+        networkNote = `OSM network failed connectivity validation (${v.issues.map((i) => i.detail).join("; ")}) — using demonstration grid`;
+        built = null;
+      } else {
+        networkNote = `OpenStreetMap road network: ${v.nodes} junctions, ${v.edges} directed segments with real geometry, ${built.graph.signalNodeCount} OSM signal locations, ${v.turnRestrictions} real turn restrictions`;
+        await deps.saveManifest({
+          kind: "osm-roads", endpoint: res.meta.endpoint, license: res.meta.license,
+          lat: patient.lat, lng: patient.lng, radiusM: settings.networkRadiusM,
+          nodeCount: v.nodes, edgeCount: v.edges, osmSignalNodes: res.meta.osmSignalNodes, studyCity: "Chennai, India",
+        }).catch(() => undefined);
+      }
     } else {
-      networkNote = `OSM road fetch failed (${res.error}) — using demonstration grid network`;
+      networkNote = res.ok ? "No OSM ways in range — using demonstration grid" : `OSM road fetch failed (${res.error}) — using demonstration grid network`;
     }
   } catch (err) {
     networkNote = `OSM road fetch failed (${err instanceof Error ? err.message : String(err)}) — using demonstration grid network`;
@@ -100,6 +100,20 @@ export async function runDispatchFlow(
 
   ctrl.setup(built.graph, built.projection);
   ctrl.log("network", networkNote);
+  const validation = validateNetwork(built.graph);
+  for (const issue of validation.issues) ctrl.log("validate", `${issue.severity}: ${issue.detail}`);
+
+  // ---- patient snapping to a REAL road access point ----
+  const px = (patient.lng - built.projection.center.lng) * built.projection.mPerDegLng;
+  const py = (patient.lat - built.projection.center.lat) * built.projection.mPerDegLat;
+  const patientSnap = snapToRoad(built.graph, built.projection, px, py, settings.maxSnapM);
+  if (!patientSnap) {
+    return {
+      ok: false, graph: built, candidates: [],
+      error: `No road within ${settings.maxSnapM} m of the selected location (park, water body, or disconnected area). Please select a patient location closer to a road.`,
+    };
+  }
+  const patientAccessNode = insertAccessNode(built.graph, patientSnap, "patient-access");
 
   // ---- hospital discovery ----
   let candidates: HospitalCandidate[] = [];
@@ -123,33 +137,51 @@ export async function runDispatchFlow(
     ctrl.log("hospital", `${hospitalError ?? "No OSM hospitals in range"} — falling back to DEMONSTRATION hospitals (clearly labeled, not real facilities)`);
   }
 
-  // ---- score & rank candidates on the actual road graph ----
-  const patientNode = closestNodeTo(built.graph, ...xy(ctrl, patient));
+  // ---- score candidates on the actual road graph (patient access -> hospital access) ----
   for (const c of candidates) {
-    const { x, y } = toLocal(built.projection, c);
-    const node = closestNodeTo(built.graph, x, y);
-    const path = astar(built.graph, patientNode, node);
+    const lx = (c.lng - built.projection.center.lng) * built.projection.mPerDegLng;
+    const ly = (c.lat - built.projection.center.lat) * built.projection.mPerDegLat;
+    const snap = snapToRoad(built.graph, built.projection, lx, ly, settings.maxSnapM * 4);
+    c.access = snap;
+    const targetNode = snap ? built.graph.edgesById.get(snap.edgeId)!.from : nearestNode(built.graph, lx, ly);
+    const path = astar(built.graph, patientAccessNode, targetNode);
     c.scores = scoreHospital(c, kind, path ? path.cost : null, path ? path.distance : null);
   }
   candidates.sort((a, b) => (b.scores?.total ?? 0) - (a.scores?.total ?? 0));
   const best = candidates[0];
   if (!best) {
-    return { ok: false, error: "No suitable hospital could be found. Try another area (select a different patient location) and dispatch again.", graph: built, candidates: [] };
+    return { ok: false, error: "No suitable hospital could be found. Try another area and dispatch again.", graph: built, candidates: [] };
   }
   ctrl.log("hospital", `Selected hospital: ${best.name} (score ${best.scores!.total.toFixed(2)})${usingDemoHospitals ? " — DEMO DATA" : ""}. ${best.scores!.notes.join(" ")}`);
 
-  // ---- hand over to the simulation controller (PPO quick-train + routing) ----
-  await new Promise((r) => setTimeout(r, 30)); // let the UI paint the training state
-  const result = ctrl.dispatch({ patient, emergencyText, emergencyKind: kind, hospital: best });
+  // ---- hospital road access node ----
+  let hospitalAccessNode: number;
+  if (best.access) {
+    hospitalAccessNode = insertAccessNode(built.graph, best.access, "hospital-access");
+  } else {
+    const hx = (best.lng - built.projection.center.lng) * built.projection.mPerDegLng;
+    const hy = (best.lat - built.projection.center.lat) * built.projection.mPerDegLat;
+    hospitalAccessNode = nearestNode(built.graph, hx, hy);
+    ctrl.log("hospital", "Hospital road-access snap unavailable — using nearest junction (distance recorded)");
+  }
+  const hospitalAccess = best.access ?? {
+    edgeId: -1, arcPos: 0,
+    x: built.graph.nodesById.get(hospitalAccessNode)!.x,
+    y: built.graph.nodesById.get(hospitalAccessNode)!.y,
+    lat: best.lat, lng: best.lng, distanceM: 0,
+  };
+
+  // ---- PPO quick-train + routing (inside the controller) ----
+  await new Promise((r) => setTimeout(r, 30));
+  const result = ctrl.dispatch({
+    patient, emergencyText, emergencyKind: kind, hospital: best,
+    patientAccessNode, hospitalAccessNode,
+    patientAccess: { ...patientSnap },
+    hospitalAccess,
+    classification,
+  });
   if (!result.ok) return { ok: false, error: result.error, graph: built, candidates };
-  return { ok: true, graph: built, hospital: best, candidates, training: result.training };
+  return { ok: true, graph: built, hospital: best, candidates, training: result.training, classification, validation };
 }
 
-function xy(ctrl: ReturnType<typeof getController>, ll: LatLng): [number, number] {
-  return [
-    (ll.lng - ctrl.projection.center.lng) * ctrl.projection.mPerDegLng,
-    (ll.lat - ctrl.projection.center.lat) * ctrl.projection.mPerDegLat,
-  ];
-}
-
-export { api };
+export { criticalityConfig, classifyCriticality };

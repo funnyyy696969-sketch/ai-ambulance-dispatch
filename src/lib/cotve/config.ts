@@ -1,3 +1,5 @@
+import type { Criticality } from "./types";
+
 /** CoTV-E configuration.
  *
  * The original prompt specified YAML config files. In this web port the same
@@ -10,7 +12,10 @@ export const settings = {
   /** radius (m) around the patient used to build the road network */
   networkRadiusM: 900,
   /** max road-network nodes before falling back to the demo grid */
-  maxOsmNodes: 400,
+  maxOsmNodes: 600,
+  /** max distance (m) a selected patient/hospital point may be from a road
+   * before the app asks the user to choose another location */
+  maxSnapM: 120,
   /** demo grid size (nodes per side) when OSM is unavailable */
   demoGridSize: 9,
   demoGridSpacingM: 130,
@@ -94,6 +99,50 @@ export const emergencyOptions: { value: EmergencyKindLabel; label: string }[] =
     value: k,
     label: emergencyRules[k].label,
   }));
+
+/** ---------------- Critical emergency classification ----------------
+ * A documented, configurable keyword policy — NOT a clinical diagnosis.
+ * A free-text emergency is classified as:
+ *   critical     — matches a documented critical keyword phrase
+ *   non-critical — matches a documented minor phrase
+ *   uncertain    — no documented match; NEVER silently upgraded to critical
+ * The escalation policy below is configurable and shown in the UI. */
+export const criticalityConfig = {
+  /** when true, "uncertain" emergencies are treated as critical for
+   * dispatch priority (configurable escalation policy) */
+  uncertainAsCritical: false,
+  /** simulated pickup duration differences per class */
+  pickupDurationCriticalS: 8,
+  pickupDurationNonCriticalS: 14,
+};
+
+export const criticalityRules: { label: string; criticality: "critical" | "non-critical"; keywords: string[] }[] = [
+  { label: "severe road accident", criticality: "critical", keywords: ["severe accident", "severe road accident", "major accident", "major road accident", "serious accident", "multi-vehicle", "collision", "crash"] },
+  { label: "cardiac emergency", criticality: "critical", keywords: ["heart emergency", "heart attack", "cardiac arrest", "cardiac", "chest pain"] },
+  { label: "stroke", criticality: "critical", keywords: ["stroke", "face droop", "slurred speech"] },
+  { label: "major injury / severe bleeding", criticality: "critical", keywords: ["major injury", "severe bleeding", "heavy bleeding", "hemorrh", "haemorrh", "unconscious", "not breathing"] },
+  { label: "severe respiratory distress", criticality: "critical", keywords: ["severe breath", "can't breathe", "cannot breathe", "respiratory distress", "choking", "drowning"] },
+  { label: "minor injury", criticality: "non-critical", keywords: ["minor injury", "sprain", "small cut", "bruise", "minor cut"] },
+  { label: "non-urgent illness", criticality: "non-critical", keywords: ["fever", "cold", "cough", "headache", "nausea", "sore throat"] },
+];
+
+export function classifyCriticality(text: string): { criticality: Criticality; matchedRule: string | null; notes: string } {
+  const s = text.toLowerCase();
+  for (const r of criticalityRules) {
+    if (r.keywords.some((k) => s.includes(k))) {
+      return {
+        criticality: r.criticality,
+        matchedRule: r.label,
+        notes: `matched configured ${r.criticality} rule "${r.label}" — keyword policy, not a clinical diagnosis`,
+      };
+    }
+  }
+  return {
+    criticality: "uncertain",
+    matchedRule: null,
+    notes: "no configured criticality rule matched — priority stays OFF unless escalation is enabled",
+  };
+}
 
 export const trafficSettings = {
   /** number of simulated background vehicles */

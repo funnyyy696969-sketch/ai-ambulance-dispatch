@@ -1,35 +1,30 @@
 import { describe, it, expect } from "vitest";
-import { buildGraph, generateDemoGrid } from "../network";
+import { buildGraph, generateDemoGrid, validateNetwork, type RawOsmNetwork } from "../network";
 import { countVocClasses, parseCityFlowLine } from "../datasets/parsers";
 import { IDD, CITYFLOW_V2, DATASETS, STUDY_CITY } from "../datasets/registry";
 
 describe("real OSM traffic-signal locations", () => {
   it("marks nodes carrying a real highway=traffic_signals tag as signalized with source 'osm'", () => {
     const center = { lat: 13.0827, lng: 80.2707 }; // Chennai
-    const raw = {
-      nodes: [
-        { id: 1, lat: center.lat, lng: center.lng, signal: true },
-        { id: 2, lat: center.lat, lng: center.lng + 0.002 },
-        { id: 3, lat: center.lat + 0.002, lng: center.lng },
-        { id: 4, lat: center.lat + 0.002, lng: center.lng + 0.002 },
+    const p = (lat: number, lng: number, id: number) => ({ id, lat, lng });
+    const raw: RawOsmNetwork = {
+      ways: [
+        { id: 1, nodes: [p(center.lat, center.lng, 1), p(center.lat, center.lng + 0.002, 2)], oneway: false, type: "primary", maxspeed: 16, lanes: null },
+        { id: 2, nodes: [p(center.lat, center.lng, 1), p(center.lat + 0.002, center.lng, 3)], oneway: false, type: "primary", maxspeed: 16, lanes: null },
+        { id: 3, nodes: [p(center.lat, center.lng + 0.002, 2), p(center.lat + 0.002, center.lng + 0.002, 4)], oneway: false, type: "residential", maxspeed: 8, lanes: null },
+        { id: 4, nodes: [p(center.lat + 0.002, center.lng, 3), p(center.lat + 0.002, center.lng + 0.002, 4)], oneway: false, type: "residential", maxspeed: 8, lanes: null },
       ],
-      edges: [
-        { from: 1, to: 2, oneway: false, type: "primary", maxspeed: 16 },
-        { from: 1, to: 3, oneway: false, type: "primary", maxspeed: 16 },
-        { from: 2, to: 4, oneway: false, type: "residential", maxspeed: 8 },
-        { from: 3, to: 4, oneway: false, type: "residential", maxspeed: 8 },
-      ],
-      source: "osm" as const,
+      signals: [{ lat: center.lat, lng: center.lng }],
+      restrictions: [],
+      source: "osm",
     };
     const { graph } = buildGraph(raw, center);
-    const sig = graph.nodes.find((n) => n.lat === center.lat && n.lng === center.lng)!;
+    const sig = graph.nodes.find((n) => n.signalSource === "osm")!;
+    expect(sig).toBeDefined();
     expect(sig.signalized).toBe(true);
-    expect(sig.signalSource).toBe("osm");
-    // on real OSM networks, untagged junctions are NOT claimed as signals
     const others = graph.nodes.filter((n) => n.id !== sig.id);
-    for (const n of others) {
-      expect(n.signalSource).not.toBe("osm");
-    }
+    for (const n of others) expect(n.signalSource).not.toBe("osm");
+    expect(validateNetwork(graph).ok).toBe(true);
   });
 
   it("demo grids still produce inferred signals, labeled as inferred", () => {

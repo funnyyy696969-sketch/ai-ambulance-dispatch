@@ -8,10 +8,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Download, RotateCcw } from "lucide-react";
+import { Download, RotateCcw, TriangleAlert } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip as ReTooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid } from "recharts";
 import { useSimStore } from "@/lib/cotve/store";
 import { getController, modeLabel } from "@/lib/cotve/simulation";
+import { toLatLng } from "@/lib/cotve/geo";
 import { emergencyRules, type EmergencyKindLabel } from "@/lib/cotve/config";
 
 function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
@@ -29,6 +30,37 @@ function fmt(s: number | null | undefined, digits = 1): string {
 
 function meters(m: number | null | undefined): string {
   return m === null || m === undefined || m < 0 ? "—" : `${(m / 1000).toFixed(2)} km`;
+}
+
+/** Clearly-labeled SIMULATED accident: blocks a road ahead on the active
+ * route and triggers connected rerouting. Never presented as real. */
+function SimulateAccidentButton() {
+  const status = useSimStore((s) => s.status);
+  const setStore = useSimStore((s) => s.set);
+  const ctrl = getController();
+  const active = status?.phase === "to-patient" || status?.phase === "to-hospital";
+  const onClick = () => {
+    const a = ctrl.ambulance;
+    const route = ctrl.currentRoute;
+    if (!a || !route) return;
+    // pick an open route edge ahead (not the one we are on)
+    const ahead = route.edgeIds.slice(a.routeIdx + 1).find((id) => !ctrl.graph.edgesById.get(id)!.blocked);
+    const target = ahead ?? route.edgeIds[a.routeIdx];
+    if (target === undefined) return;
+    ctrl.blockEdge(target, "SIMULATED accident scenario (test event, not a real accident)");
+    const polys: [number, number][][] = ctrl.graph.edges
+      .filter((e) => e.blocked)
+      .map((e) => e.geom.map((p) => {
+        const ll = toLatLng(ctrl.projection, p.x, p.y);
+        return [ll.lat, ll.lng] as [number, number];
+      }));
+    setStore({ blockVersion: useSimStore.getState().blockVersion + 1, blockedPolys: polys });
+  };
+  return (
+    <Button size="sm" variant="outline" disabled={!active} onClick={onClick} className="border-red-500/40 text-red-400 hover:bg-red-500/10">
+      <TriangleAlert className="mr-1 h-3.5 w-3.5" /> Simulate accident
+    </Button>
+  );
 }
 
 export default function DashboardPanel() {
@@ -110,6 +142,11 @@ export default function DashboardPanel() {
       ["relevant_intersections", String(metrics.relevantIntersections), ""],
       ["ppo_episodes_quicktrain", String(metrics.ppoEpisodes), ""],
       ["ppo_routing_mode", status?.routingMode ?? "", ""],
+      ["criticality", status?.criticality ?? "", ""],
+      ["patient_access_distance_m", metrics.patientAccessDistance.toFixed(1), "m"],
+      ["hospital_access_distance_m", metrics.hospitalAccessDistance.toFixed(1), "m"],
+      ["blockage_events", String(metrics.blockageEvents), ""],
+      ["reroutes", String(metrics.reroutes), ""],
       ["baseline_dijkstra_est_time", metrics.baseline?.dijkstraTime?.toFixed(1) ?? "", "s"],
       ["baseline_astar_est_time", metrics.baseline?.astarTime?.toFixed(1) ?? "", "s"],
       ["route_mode_to_patient", metrics.legs.toPatient ? modeLabel(getController().currentRoute?.mode ?? "ppo") : "", ""],
@@ -132,6 +169,7 @@ export default function DashboardPanel() {
             <Badge variant={phaseVariant(status?.phase)} className="font-mono text-[10px] uppercase">
               {status?.phase ?? "standby"}
             </Badge>
+            {(status?.phase === "to-patient" || status?.phase === "to-hospital") && <SimulateAccidentButton />}
             {complete && (
               <>
                 <Button size="sm" variant="outline" onClick={downloadCsv}>
@@ -179,6 +217,9 @@ export default function DashboardPanel() {
             <Row label="Distance traveled" value={meters(status?.distanceTraveled ?? null)} mono />
             <Row label="Next signal" value={status?.signalStatus ?? "—"} />
             <Row label="Emergency priority" value={status?.priorityStatus ?? "—"} />
+            <Row label="Classification" value={status ? `${status.criticality} — ${status.classificationNote}` : "—"} />
+            <Row label="Patient access distance" value={status?.patientAccessM != null ? `${status.patientAccessM.toFixed(0)} m to road` : "—"} mono />
+            <Row label="Blocked roads / reroutes" value={status ? `${status.blockedRoads} / ${status.reroutes}` : "—"} mono />
             <Row label="Routing mode" value={status?.routingMode ?? "—"} />
             {networkInfo && (
               <p className="mt-2 rounded-md bg-muted/60 px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">{networkInfo}</p>
@@ -197,6 +238,9 @@ export default function DashboardPanel() {
                   <MetricTile label="Route recalcs" value={String((metrics.legs.toPatient?.recalcs ?? 0) + (metrics.legs.toHospital?.recalcs ?? 0))} />
                   <MetricTile label="Priority requests / activations" value={`${metrics.signalRequests} / ${metrics.signalActivations}`} />
                   <MetricTile label="Restorations · intersections" value={`${metrics.signalRestorations} · ${metrics.relevantIntersections}`} />
+                  <MetricTile label="Classification" value={metrics.criticality} />
+                  <MetricTile label="Access dist (patient / hospital)" value={`${metrics.patientAccessDistance.toFixed(0)} / ${metrics.hospitalAccessDistance.toFixed(0)} m`} />
+                  <MetricTile label="Blockage events · reroutes" value={`${metrics.blockageEvents} · ${metrics.reroutes}`} />
                 </div>
                 <div className="h-40">
                   <div className="mb-1 text-xs font-medium text-muted-foreground">Baseline comparison (estimated travel time, same network & initial congestion — not re-simulated)</div>
