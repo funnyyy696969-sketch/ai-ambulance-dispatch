@@ -4,15 +4,21 @@ import { api } from "../../convex/_generated/api";
 import { Siren, MapPin, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSimStore } from "@/lib/cotve/store";
 import { getController } from "@/lib/cotve/simulation";
 import { runDispatchFlow } from "@/lib/cotve/dispatchFlow";
-import { emergencyOptions } from "@/lib/cotve/config";
+import { emergencyCategories } from "@/lib/cotve/config";
 import { toast } from "sonner";
 
+/** sentinel value: user wants to describe an emergency not in the list */
+const CUSTOM = "__custom";
+
 export default function DispatchPanel() {
-  const [emergency, setEmergency] = useState("Heart emergency");
+  const [emergency, setEmergency] = useState("Cardiac emergency");
+  const [customText, setCustomText] = useState("");
   const [escalateUncertain, setEscalateUncertain] = useState(false);
+  const finalEmergency = emergency === CUSTOM ? customText.trim() : emergency;
   const patient = useSimStore((s) => s.patient);
   const dispatching = useSimStore((s) => s.dispatching);
   const training = useSimStore((s) => s.training);
@@ -23,19 +29,22 @@ export default function DispatchPanel() {
   const searchHospitals = useAction(api.osm.searchHospitals);
   const fetchRoads = useAction(api.osm.fetchRoads);
   const fetchBuildings = useAction(api.osm.fetchBuildings);
-  const saveOsmManifest = useMutation(api.simulations.saveOsmManifest);
-
-  const onDispatch = async () => {
+  const saveOsmManifest = useMutation(api.simulations.saveOsmManifest);  const onDispatch = async () => {
     if (!patient) {
       toast.error("Select the patient location on the map first (click the map).");
       return;
     }
-    if (!emergency.trim()) {
-      toast.error("Enter the disease / emergency type.");
+    if (!finalEmergency) {
+      toast.error(
+        emergency === CUSTOM
+          ? "Describe the emergency in the text field."
+          : "Select the emergency type from the dropdown.",
+      );
       return;
-    }      setStore({ dispatching: true, saved: false, training: null, emergencyText: emergency.trim() });
+    }
+    setStore({ dispatching: true, saved: false, training: null, emergencyText: finalEmergency });
     try {
-      const res = await runDispatchFlow(patient, emergency.trim(), {
+      const res = await runDispatchFlow(patient, finalEmergency, {
         fetchHospitals: (a) => searchHospitals(a),
         fetchRoads: (a) => fetchRoads(a),
         fetchBuildings: (a) => fetchBuildings(a),
@@ -83,20 +92,29 @@ export default function DispatchPanel() {
         </span>
       </div>
       <div className="space-y-1.5">
-        <label className="text-xs font-medium text-muted-foreground">Disease / emergency type</label>
-        <Input
-          value={emergency}
-          onChange={(e) => setEmergency(e.target.value)}
-          placeholder="e.g. Heart emergency, stroke, accident…"
-          list="emergency-examples"
-        />
-        <datalist id="emergency-examples">
-          {emergencyOptions.map((o) => (
-            <option key={o.value} value={o.label} />
-          ))}
-        </datalist>
+        <label className="text-xs font-medium text-muted-foreground">Emergency type</label>
+        <Select value={emergency} onValueChange={setEmergency}>
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="Select emergency type" />
+          </SelectTrigger>
+          <SelectContent className="max-h-72">
+            {emergencyCategories.map((label) => (
+              <SelectItem key={label} value={label}>
+                {label}
+              </SelectItem>
+            ))}
+            <SelectItem value={CUSTOM}>Other / describe another emergency…</SelectItem>
+          </SelectContent>
+        </Select>
+        {emergency === CUSTOM && (
+          <Input
+            value={customText}
+            onChange={(e) => setCustomText(e.target.value)}
+            placeholder="Describe the emergency, e.g. snake bite…"
+          />
+        )}
         <p className="text-[11px] text-muted-foreground">
-          CoTV-E does not diagnose disease — this only steers hospital specialty matching.
+          CoTV-E does not diagnose disease — the selection only steers criticality and hospital specialty matching.
         </p>
         <label className="flex items-center gap-2 pt-1 text-[11px] text-muted-foreground">
           <input type="checkbox" checked={escalateUncertain} onChange={(e) => setEscalateUncertain(e.target.checked)} className="accent-red-600" />

@@ -100,6 +100,27 @@ export const emergencyOptions: { value: EmergencyKindLabel; label: string }[] =
     label: emergencyRules[k].label,
   }));
 
+/** The configurable emergency categories shown in the dispatch dropdown
+ * (master specification §8). Selecting one supplies the ROUTING and
+ * HOSPITAL-SELECTION input only — CoTV-E never performs a clinical
+ * diagnosis. Hospital matching derives its group from the label text via
+ * `classifyEmergency`, and criticality via `classifyCriticality` below. */
+export const emergencyCategories: string[] = [
+  "Cardiac emergency",
+  "Stroke emergency",
+  "Severe breathing difficulty",
+  "Road accident",
+  "Car accident",
+  "Bike accident",
+  "Multiple-vehicle accident",
+  "Bone fracture",
+  "Severe bleeding",
+  "Head injury",
+  "Burn injury",
+  "Poisoning",
+  "Other critical emergency",
+];
+
 /** ---------------- Critical emergency classification ----------------
  * A documented, configurable keyword policy — NOT a clinical diagnosis.
  * A free-text emergency is classified as:
@@ -122,6 +143,10 @@ export const criticalityRules: { label: string; criticality: "critical" | "non-c
   { label: "stroke", criticality: "critical", keywords: ["stroke", "face droop", "slurred speech"] },
   { label: "major injury / severe bleeding", criticality: "critical", keywords: ["major injury", "severe bleeding", "heavy bleeding", "hemorrh", "haemorrh", "unconscious", "not breathing"] },
   { label: "severe respiratory distress", criticality: "critical", keywords: ["severe breath", "can't breathe", "cannot breathe", "respiratory distress", "choking", "drowning"] },
+  { label: "road traffic accident", criticality: "critical", keywords: ["road accident", "car accident", "bike accident", "vehicle accident", "multiple-vehicle", "multi-vehicle"] },
+  { label: "poisoning / overdose", criticality: "critical", keywords: ["poisoning", "poison", "overdose", "ingested"] },
+  { label: "head injury", criticality: "critical", keywords: ["head injury", "head trauma", "skull"] },
+  { label: "explicitly declared critical", criticality: "critical", keywords: ["critical emergency", "life-threatening", "life threatening"] },
   { label: "minor injury", criticality: "non-critical", keywords: ["minor injury", "sprain", "small cut", "bruise", "minor cut"] },
   { label: "non-urgent illness", criticality: "non-critical", keywords: ["fever", "cold", "cough", "headache", "nausea", "sore throat"] },
 ];
