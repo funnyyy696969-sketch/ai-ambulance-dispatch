@@ -1,6 +1,7 @@
 import { settings, trafficSettings, criticalityConfig } from "./config";
 import type {
   AmbulanceState,
+  BuildingFootprint,
   Classification,
   LatLng,
   HospitalCandidate,
@@ -14,7 +15,7 @@ import type {
   TripMetrics,
 } from "./types";
 import { Projection } from "./geo";
-import { edgePoseAt, pickDepots, routeLength } from "./network";
+import { edgePoseAt, routeLength } from "./network";
 import {
   createRoutingContext,
   planRoutePpo,
@@ -33,11 +34,17 @@ export interface DispatchPayload {
   patient: LatLng;
   emergencyText: string;
   emergencyKind: string;
+  /** treatment hospital (final destination, best match for the emergency) */
   hospital: HospitalCandidate;
+  /** nearest suitable hospital the ambulance departs from (may equal hospital) */
+  dispatchHospital: HospitalCandidate;
   patientAccessNode: number;
   hospitalAccessNode: number;
+  /** road-access node of the dispatch hospital (ambulance start) */
+  dispatchHospitalNode: number;
   patientAccess: RoadSnap;
   hospitalAccess: RoadSnap;
+  dispatchHospitalAccess: RoadSnap;
   classification: Classification;
 }
 
@@ -99,8 +106,12 @@ export class SimulationController {
   patient!: LatLng;
   patientNode = 0;
   hospitalCand: HospitalCandidate | null = null;
+  /** nearest suitable hospital the ambulance departs from (may equal hospital) */
+  dispatchHospitalCand: HospitalCandidate | null = null;
   hospitalNode = 0;
   depotNode = 0;
+  /** real OSM building footprints (geometry-true, shared projection) */
+  buildings: BuildingFootprint[] = [];
   emergencyText = "";
   emergencyKind = "general";
   classification: Classification = { criticality: "uncertain", matchedRule: null, notes: "" };
@@ -178,19 +189,16 @@ export class SimulationController {
 
       this.patientNode = payload.patientAccessNode;
       this.hospitalNode = payload.hospitalAccessNode;
+      this.dispatchHospitalCand = payload.dispatchHospital;
       this.metrics.patientAccessDistance = payload.patientAccess.distanceM;
       this.metrics.hospitalAccessDistance = payload.hospitalAccess.distanceM;
 
-      const depots = pickDepots(this.graph);
-      let bestDepot = depots[0];
-      let bestTime = Infinity;
-      for (const d of depots) {
-        const r = planRouteAstar(this.graph, d, this.patientNode);
-        if (r && r.estimatedTime < bestTime) { bestTime = r.estimatedTime; bestDepot = d; }
-      }
+      // The ambulance starts at the DISPATCH hospital (nearest suitable one by
+      // road travel time), NOT an arbitrary depot — see dispatchFlow.
+      const bestDepot = payload.dispatchHospitalNode;
       this.depotNode = bestDepot;
       const dn = this.graph.nodesById.get(bestDepot)!;
-      this.log("ambulance", `Simulated ambulance assigned from depot at (${dn.lat.toFixed(4)}, ${dn.lng.toFixed(4)}) — nearest by road-network travel time`);
+      this.log("ambulance", `Simulated ambulance departs from ${payload.dispatchHospital.name}${payload.dispatchHospital.demo ? " (DEMO)" : ""} at (${dn.lat.toFixed(4)}, ${dn.lng.toFixed(4)}) — nearest suitable hospital by road-network travel time`);
       this.log("access", `Patient access point: ${payload.patientAccess.distanceM.toFixed(0)} m from the selected location (marker stays at the original point)`);
 
       refreshEmbeddings(this.rc, this.patientNode, this.hospitalNode);
@@ -251,6 +259,7 @@ export class SimulationController {
     this.metrics = emptyMetrics();
     this.errorMessage = "";
     this.hospitalCand = null;
+    this.dispatchHospitalCand = null;
     this.classification = { criticality: "uncertain", matchedRule: null, notes: "" };
     this.syncLive();
   }
@@ -578,6 +587,15 @@ export class SimulationController {
     if (!this.graph || !this.ambulance) return null;
     const n = this.graph.nodesById.get(this.depotNode);
     return n ? { x: n.x, y: n.y } : null;
+  }
+
+  /** geographic (projected) location of the dispatch hospital building. */
+  dispatchHospitalXY(): { x: number; y: number } | null {
+    if (!this.dispatchHospitalCand || !this.projection) return null;
+    return {
+      x: (this.dispatchHospitalCand.lng - this.projection.center.lng) * this.projection.mPerDegLng,
+      y: (this.dispatchHospitalCand.lat - this.projection.center.lat) * this.projection.mPerDegLat,
+    };
   }
 }
 

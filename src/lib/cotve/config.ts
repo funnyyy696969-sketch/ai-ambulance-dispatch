@@ -183,3 +183,44 @@ export function makeRng(seed: number) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+/** ---------------- Realistic city rendering ----------------
+ * Controlled, real-city building palette (NOT neon, NOT uniform). Colors are
+ * muted creams/beiges/greys/pastels with a few terracotta/orange accents so
+ * the map reads like a real urban area rather than a cartoon. */
+export const buildingPalette: [number, number, number][] = [
+  [0.93, 0.90, 0.82], // light cream
+  [0.96, 0.96, 0.94], // white
+  [0.80, 0.81, 0.80], // light grey
+  [0.87, 0.82, 0.70], // beige
+  [0.75, 0.84, 0.89], // pale blue
+  [0.93, 0.89, 0.72], // soft yellow
+  [0.80, 0.55, 0.42], // terracotta
+  [0.72, 0.60, 0.48], // light brown
+  [0.86, 0.66, 0.46], // muted orange
+  [0.84, 0.78, 0.82], // pastel mauve
+  [0.78, 0.85, 0.76], // pastel green
+  [0.88, 0.85, 0.78], // warm sand
+];
+
+export const buildingSettings = {
+  /** cap on rendered footprints (integrated-graphics friendly) */
+  maxBuildings: 900,
+  /** documented ESTIMATED heights (m) by OSM building tag when no height tag */
+  estimatedHeights: {
+    house: 6, residential: 9, apartments: 15, detached: 6, bungalow: 5,
+    commercial: 12, retail: 9, office: 18, industrial: 10, warehouse: 11,
+    hospital: 16, school: 9, university: 15, church: 14, hotel: 20,
+    civic: 12, public: 12, default: 8,
+  } as Record<string, number>,
+  /** metres per storey used when only building:levels is available */
+  metresPerLevel: 3.2,
+} as const;
+
+export const vehicleKinds = [
+  { kind: "car" as const, colors: [0xb03a2e, 0x2e86c1, 0xf4d03f, 0x5d6d7e, 0xffffff, 0x1c8c5a] },
+  { kind: "two-wheeler" as const, colors: [0xd98c1f, 0x7d3c98, 0x1abc9c, 0xc0392b] },
+  { kind: "auto" as const, colors: [0xf39c12] }, // auto-rickshaw yellow/green
+  { kind: "bus" as const, colors: [0x2874a6, 0xc0392b] },
+  { kind: "truck" as const, colors: [0x5d6d7e, 0x6c3483] },
+] as const;

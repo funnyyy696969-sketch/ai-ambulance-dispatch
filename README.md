@@ -33,17 +33,21 @@ visualized in two synchronized 3D screens.
      ranked on the *actual road graph* (verified specialties, emergency tag, road ETA, data
      completeness). Unknown capabilities are shown as **unknown**, never invented. If OSM is
      unreachable, clearly-labeled demo hospitals are used.
-   - The nearest **simulated ambulance depot** is selected by road-network travel time.
+   - **Hospital-based dispatch**: the ambulance departs from the **nearest suitable hospital**
+     (by road-network travel time) and transports the patient to the **best-matching treatment
+     hospital** for the emergency — these may be the same or two different hospitals (see §8).
+   - Real **OSM building footprints** are fetched and extruded into colorful 3D buildings that
+     keep their true geographic position (see §3.5).
    - The **GNN** embeds the road network; the **PPO agent** is quick-trained in the browser
      (demonstration scale) and plans the route leg-by-leg with **masked, connected actions**.
    - **Dijkstra and A\*** run as comparison baselines on the same network & congestion.
    - **Accident response**: the user may select a *simulated* accident blockage (or a real
      accident record only if one is actually loaded — none is fabricated), which closes the
      affected segment(s) and forces a **connected reroute** (see §7b).
-5. The journey runs through the shared simulation controller:
-   **ambulance → patient → simulated pickup → hospital**, with **route-specific emergency
-   signal priority** (only intersections on the active route are preempted; normal cycling
-   is restored after the ambulance passes).
+5. The journey runs through the shared simulation controller as **two legs**:
+   **dispatch hospital → patient → simulated pickup → treatment hospital**, with
+   **route-specific emergency signal priority** (only intersections on the active route are
+   preempted; normal cycling is restored after the ambulance passes).
 6. **Screen 1** is a follow camera on the ambulance (follow / elevated / top-down, scroll to
    zoom). **Screen 2** auto-focuses the next priority intersection and shows the live signal
    state. Both read **one shared simulation state** — one clock, one ambulance, one route.
@@ -70,7 +74,8 @@ src/
 │   ├── types.ts            # core data model
 │   ├── config.ts           # settings.yaml / emergency_rules.yaml / traffic_settings.yaml equivalents
 │   ├── geo.ts              # lat/lng <-> local meters projection
-│   ├── network.ts          # road graph (OSM parse + demo-grid fallback), signals, depots, buildings
+│   ├── network.ts          # road graph (OSM parse + demo-grid fallback), signals, depots
+│   ├── buildings.ts        # real OSM building footprints -> local extruded polygons, honest heights
 │   ├── baselines.ts        # dijkstra.ts + astar.ts equivalents
 │   ├── gnn.ts              # GNN model (graph_features folded in)
 │   ├── ppo.ts              # ppo_agent + ppo_trainer (rollouts, clipped PPO update, quick-train)
@@ -83,10 +88,10 @@ src/
 │   ├── dispatchFlow.ts     # full dispatch pipeline orchestration
 │   ├── store.ts            # UI snapshot store
 │   ├── datasets/           # registry.ts + parsers.ts (verified real-dataset facts)
-│   └── __tests__/          # 5 vitest suites incl. the 14-case routing-correctness suite (§10)
+│   └── __tests__/          # 6 vitest suites incl. the 14-case routing-correctness suite (§10)
 ├── components/cotve/       # MapPicker, DispatchPanel, DashboardPanel, CityScene, two 3D views
 ├── pages/                  # Landing.tsx, Dispatch.tsx (console), Auth.tsx
-└── convex/                 # osm.ts (Overpass actions), simulations.ts (history), schema.ts
+└── convex/                 # osm.ts (Overpass actions incl. buildings), simulations.ts (history), schema.ts
 ```
 
 ## 4. Running it
@@ -94,7 +99,7 @@ src/
 ```bash
 bun install                 # install dependencies
 bun run dev                 # start the app (Freebuff manages the dev server & Convex)
-bun run test                # run the 46 automated tests (vitest, no network needed)
+bun run test                # run the 52 automated tests (vitest, no network needed)
 bun convex dev --once       # push Convex functions + regenerate types
 bun tsc -b --noEmit         # typecheck
 bun run lint                # eslint
@@ -110,6 +115,8 @@ Overpass API. If Overpass is unreachable the app keeps working on clearly-labele
 - `criticalityConfig` / `criticalityRules` — the configurable **emergency-classification**
   policy (critical / non-critical / uncertain) and its escalation switch (see §7a).
 - `emergencyRules` — emergency type → verified-tag keywords for specialty matching.
+- `buildingSettings` / `buildingPalette` — real-building height estimation rules + the controlled
+  colorful city palette (see §3.5). `vehicleKinds` defines the vehicle type/colour mix.
 - `trafficSettings` — vehicle count, congestion model, ambulance speed factors, gaps.
 - `signalSettings` — green/yellow/all-red timings, priority approach distance, hold times.
 
@@ -175,6 +182,45 @@ physical closure would, the affected edges are marked `blocked`, the route-integ
 fires, and the ambulance **reroutes from its next connected junction** (never teleporting,
 never entering the blocked road). If the blockage severs the only access, the app reports an
 honest **"route unavailable"** message instead of fabricating a path.
+
+## 7c. Hospital-based ambulance dispatch
+
+The ambulance **never starts from an arbitrary depot**. Two roles are chosen automatically
+from the discovered hospital candidates (the user never picks or types a hospital):
+
+- **Dispatch hospital** — the **nearest suitable** hospital to the patient, measured by
+  **road-network travel time** (directed A\* from each candidate's road-access node to the
+  patient access node). This is where the ambulance departs from.
+- **Treatment hospital** — the **best-scoring** candidate for the selected emergency
+  (verified specialty match, emergency tag, road ETA, data completeness).
+
+They may be the same hospital or two different ones; the dashboard labels both. Journey 1 is
+**dispatch hospital → patient**; Journey 2 is **patient → treatment hospital**. Both legs are
+road-aligned and use the shared simulation clock. Straight-line distance is never used to
+pick a hospital.
+
+## 7d. Realistic map-aligned 3D infrastructure
+
+The real geographical map is the single source of truth — every road, building, signal,
+vehicle, hospital and the ambulance share **one projection** (`geo.ts`):
+
+- **Buildings** are **real OSM footprints** (`way[building]`, fetched via the Convex
+  `fetchBuildings` action), triangulated and extruded to their height. They render in a
+  controlled, muted **city palette** (creams, beiges, greys, terracotta, pastels) — not neon,
+  not uniform. Heights come from the OSM `height` tag (**measured**, `heightSource: "osm"`);
+  when absent, `building:levels` or a documented per-type estimate is used and clearly labeled
+  **`estimated`** — never claimed as measured. On the demo grid (no OSM), the scene shows
+  roads only rather than fabricating buildings.
+- **Traffic signals** are real 3D signal heads (housing + stacked red/amber/green lenses) on a
+  pole, placed on the **approach** of each signalized junction and facing oncoming traffic —
+  only where OSM actually tags `highway=traffic_signals` (or labeled "inferred" on the demo
+  grid). The active lens lights up from the shared signal controller.
+- **Vehicles** follow real edge geometry in a realistic mix (cars, two-wheelers,
+  auto-rickshaws, buses, trucks) with per-kind sizes and colors — simulated traffic, labeled
+  as such.
+- **The ambulance** follows the actual road geometry (arc-length interpolation, tangent
+  heading) with a light bar, red cross and wheels; it can never leave the road corridor or
+  drive through buildings.
 
 ## 8. Metrics & evaluation
 

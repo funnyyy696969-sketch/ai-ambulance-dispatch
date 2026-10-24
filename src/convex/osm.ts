@@ -69,6 +69,43 @@ export const searchHospitals = action({
   },
 });
 
+export const fetchBuildings = action({
+  args: { lat: v.number(), lng: v.number(), radiusM: v.number() },
+  handler: async (_ctx, { lat, lng, radiusM }) => {
+    try {
+      // Real OSM building footprints (closed ways) with geometry + height tags.
+      // `out geom` returns the full footprint ring in order.
+      const q = `[out:json][timeout:30];way["building"](around:${radiusM},${lat},${lng});out geom tags;`;
+      const data = await overpass(q);
+      const buildings = data.elements
+        .filter((el) => el.type === "way" && el.geometry && el.geometry.length >= 3)
+        .map((el) => {
+          const tags = el.tags ?? {};
+          const heightRaw = tags.height;
+          const levelsRaw = tags["building:levels"];
+          const heightM = heightRaw ? Number.parseFloat(heightRaw) : null;
+          const levels = levelsRaw ? Number.parseFloat(levelsRaw) : null;
+          return {
+            id: el.id,
+            ring: el.geometry!.map((pt: { lat: number; lon: number }) => ({ lat: pt.lat, lng: pt.lon })),
+            building: tags.building ?? "yes",
+            heightM: Number.isFinite(heightM as number) ? (heightM as number) : null,
+            levels: Number.isFinite(levels as number) ? (levels as number) : null,
+            name: tags.name ?? null,
+          };
+        })
+        .filter((b) => b.ring.length >= 3);
+      return {
+        ok: true as const,
+        buildings,
+        meta: { count: buildings.length, fetchedAt: Date.now(), license: "ODbL 1.0 — © OpenStreetMap contributors", endpoint: OVERPASS_URL },
+      };
+    } catch (err) {
+      return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
+    }
+  },
+});
+
 export const fetchRoads = action({
   args: { lat: v.number(), lng: v.number(), radiusM: v.number() },
   handler: async (_ctx, { lat, lng, radiusM }) => {

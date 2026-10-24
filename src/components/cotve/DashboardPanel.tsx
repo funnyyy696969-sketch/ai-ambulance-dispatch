@@ -70,6 +70,7 @@ export default function DashboardPanel() {
   const events = useSimStore((s) => s.events);
   const hospitals = useSimStore((s) => s.hospitals);
   const selected = useSimStore((s) => s.selectedHospital);
+  const dispatchHosp = useSimStore((s) => s.dispatchHospital);
   const patient = useSimStore((s) => s.patient);
   const emergencyText = useSimStore((s) => s.emergencyText);
   const training = useSimStore((s) => s.training);
@@ -207,8 +208,8 @@ export default function DashboardPanel() {
           <TabsContent value="status" className="mt-3 space-y-1 overflow-y-auto">
             <Row label="Patient location" value={patient ? `${patient.lat.toFixed(5)}, ${patient.lng.toFixed(5)}` : "—"} mono />
             <Row label="Emergency type" value={emergencyText || "—"} />
-            <Row label="Selected hospital" value={selected ? `${selected.name}${selected.demo ? " (DEMO)" : ""}` : "—"} />
-            <Row label="Ambulance start" value={useSimStore.getState().depotLatLng ? `${useSimStore.getState().depotLatLng!.lat.toFixed(5)}, ${useSimStore.getState().depotLatLng!.lng.toFixed(5)} (simulated depot)` : "—"} mono />
+            <Row label="Treatment hospital" value={selected ? `${selected.name}${selected.demo ? " (DEMO)" : ""}` : "—"} />
+            <Row label="Ambulance start (dispatch hospital)" value={dispatchHosp ? `${dispatchHosp.name}${dispatchHosp.demo ? " (DEMO)" : ""}` : useSimStore.getState().depotLatLng ? `${useSimStore.getState().depotLatLng!.lat.toFixed(5)}, ${useSimStore.getState().depotLatLng!.lng.toFixed(5)}` : "—"} />
             <Row label="Ambulance status" value={status?.ambulanceStatus ?? "—"} />
             <Row label="Current route" value={status?.routeInfo ?? "—"} />
             <Row label="Simulation time" value={fmt(status?.t ?? null)} mono />

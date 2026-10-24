@@ -41,7 +41,12 @@ function makePayload(built: ReturnType<typeof generateDemoGrid>, patient: LatLng
   const hospitalAccessNode = insertAccessNode(built.graph, hsnap, "hospital-access");
   return {
     patient, emergencyText: "Heart emergency", emergencyKind: "cardiac", hospital,
-    patientAccessNode, hospitalAccessNode, patientAccess: snap, hospitalAccess: hsnap,
+    // dispatch hospital defaults to the treatment hospital (valid: nearest == best)
+    dispatchHospital: hospital,
+    patientAccessNode, hospitalAccessNode,
+    dispatchHospitalNode: hospitalAccessNode,
+    patientAccess: snap, hospitalAccess: hsnap,
+    dispatchHospitalAccess: hsnap,
     classification: { criticality: "critical" as const, matchedRule: "cardiac emergency", notes: "test" },
   };
 }

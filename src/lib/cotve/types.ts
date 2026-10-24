@@ -188,12 +188,29 @@ export type SimPhase =
   | "complete"
   | "error";
 
+export type VehicleKind = "car" | "two-wheeler" | "auto" | "bus" | "truck";
+
 export interface VehicleState {
   id: number;
   edgeId: number;
   pos: number;
   speed: number;
   color: number;
+  kind: VehicleKind;
+}
+
+/** A real OSM building footprint projected into local meters. The ring is a
+ * closed polygon (first point not repeated); `heightSource` distinguishes a
+ * measured OSM height from a documented estimate. */
+export interface BuildingFootprint {
+  id: string;
+  ring: LocalPt[];
+  height: number;
+  heightSource: "osm" | "estimated";
+  /** OSM building tag value (e.g. "residential", "commercial") */
+  kind: string;
+  /** palette index used for controlled colourful rendering */
+  colorIdx: number;
 }
 
 export interface AmbulanceState {

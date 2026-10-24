@@ -1,5 +1,5 @@
-import { makeRng, trafficSettings } from "./config";
-import type { RoadGraph, VehicleState } from "./types";
+import { makeRng, trafficSettings, vehicleKinds } from "./config";
+import type { RoadGraph, VehicleKind, VehicleState } from "./types";
 
 /**
  * Lightweight traffic simulation. Vehicles follow connected directed edges
@@ -21,14 +21,34 @@ export class TrafficSimulator {
 
   private spawn(count: number) {
     const g = this.graph;
+    // realistic Indian-city mix: mostly cars/two-wheelers, some autos, a few
+    // buses/trucks. Weights sum to 1.
+    const mix: { kind: VehicleKind; colors: readonly number[]; w: number }[] = [
+      { kind: "car", colors: vehicleKinds[0].colors, w: 0.42 },
+      { kind: "two-wheeler", colors: vehicleKinds[1].colors, w: 0.34 },
+      { kind: "auto", colors: vehicleKinds[2].colors, w: 0.12 },
+      { kind: "bus", colors: vehicleKinds[3].colors, w: 0.07 },
+      { kind: "truck", colors: vehicleKinds[4].colors, w: 0.05 },
+    ];
+    const pick = () => {
+      let r = this.rng();
+      for (const m of mix) {
+        r -= m.w;
+        if (r <= 0) return m;
+      }
+      return mix[0];
+    };
     for (let i = 0; i < count; i++) {
       const edge = g.edges[Math.floor(this.rng() * g.edges.length)];
+      const m = pick();
+      const color = m.colors[Math.floor(this.rng() * m.colors.length)];
       this.vehicles.push({
         id: i,
         edgeId: edge.id,
         pos: this.rng() * edge.length,
         speed: 0,
-        color: Math.floor(this.rng() * 4),
+        color,
+        kind: m.kind,
       });
     }
     this.updateDensities();

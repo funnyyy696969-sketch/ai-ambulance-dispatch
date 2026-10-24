@@ -92,6 +92,30 @@ async function osmDeps(lat: number, lng: number, radiusM: number) {
         return { ok: false as const, error: String(e) };
       }
     },
+    fetchBuildings: async () => {
+      try {
+        const res = await overpass(`[out:json][timeout:30];way["building"](around:${radiusM},${lat},${lng});out geom tags;`);
+        const buildings = res.elements
+          .filter((el) => el.type === "way" && el.geometry && el.geometry.length >= 3)
+          .map((el) => {
+            const tags = el.tags ?? {};
+            const h = tags.height ? Number.parseFloat(tags.height) : null;
+            const lv = tags["building:levels"] ? Number.parseFloat(tags["building:levels"]) : null;
+            return {
+              id: el.id,
+              ring: el.geometry!.map((pt: { lat: number; lon: number }) => ({ lat: pt.lat, lng: pt.lon })),
+              building: tags.building ?? "yes",
+              heightM: Number.isFinite(h as number) ? h : null,
+              levels: Number.isFinite(lv as number) ? lv : null,
+              name: tags.name ?? null,
+            };
+          })
+          .filter((b) => b.ring.length >= 3);
+        return { ok: true as const, buildings, meta: { count: buildings.length, fetchedAt: Date.now(), license: "ODbL 1.0", endpoint: OVERPASS } };
+      } catch (e) {
+        return { ok: false as const, error: String(e) };
+      }
+    },
     saveManifest: async () => undefined,
   };
 }
@@ -108,6 +132,7 @@ async function main() {
     : {
         fetchRoads: async () => ({ ok: false as const, error: "offline" }),
         fetchHospitals: async () => ({ ok: true as const, elements: [] }),
+        fetchBuildings: async () => ({ ok: true as const, buildings: [], meta: { count: 0, fetchedAt: Date.now(), license: "n/a", endpoint: "offline" } }),
         saveManifest: async () => undefined,
       };
   // offline mode: force demo hospitals by returning empty OSM result
@@ -125,6 +150,14 @@ async function main() {
   const hn = ctrl.graph.nodesById.get(ctrl.hospitalNode);
   check("hospital destination on network & connected", !!hn && astar(ctrl.graph, ctrl.patientNode, ctrl.hospitalNode) !== null, hn?.isAccess ? "road-access node" : "nearest junction (demo hospital outside network — labeled fallback)");
   check("route is geometry-true", routePolyline(ctrl.graph, ctrl.currentRoute!.edgeIds).length > 1, `${ctrl.currentRoute!.length.toFixed(0)} m via ${ctrl.currentRoute!.mode}`);
+  // hospital-based dispatch: ambulance departs from the dispatch hospital node
+  check("ambulance departs from dispatch hospital node", ctrl.ambulance?.nodeId === ctrl.depotNode && !!ctrl.dispatchHospitalCand, `start node ${ctrl.depotNode}, dispatch=${ctrl.dispatchHospitalCand?.name ?? "—"}, treatment=${ctrl.hospitalCand?.name ?? "—"}`);
+  if (useOsm) {
+    const measured = ctrl.buildings.filter((b) => b.heightSource === "osm").length;
+    check("real OSM building footprints loaded", ctrl.buildings.length > 0, `${ctrl.buildings.length} footprints, ${measured} measured height`);
+  } else {
+    check("demo grid uses no fabricated buildings", ctrl.buildings.length === 0, `${ctrl.buildings.length} footprints (demo grid shows roads only)`);
+  }
 
   const sigCount = ctrl.signals.states.size;
   console.log(`  (signalized junctions in network: ${sigCount}${useOsm ? " — real OSM highway=traffic_signals" : " — inferred demo"})`);

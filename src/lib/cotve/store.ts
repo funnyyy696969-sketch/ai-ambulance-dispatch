@@ -19,6 +19,8 @@ export interface UiState {
   hospitalsLoading: boolean;
   hospitalsError: string | null;
   selectedHospital: HospitalCandidate | null;
+  /** nearest suitable hospital the ambulance departs from (may equal selectedHospital) */
+  dispatchHospital: HospitalCandidate | null;
   depotLatLng: LatLng | null;
   dispatching: boolean;
   status: ControllerStatus | null;
@@ -52,6 +54,7 @@ export const useSimStore = create<UiState>((set) => ({
   hospitalsLoading: false,
   hospitalsError: null,
   selectedHospital: null,
+  dispatchHospital: null,
   depotLatLng: null,
   dispatching: false,
   status: null,

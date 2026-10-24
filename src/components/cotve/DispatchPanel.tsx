@@ -22,6 +22,7 @@ export default function DispatchPanel() {
 
   const searchHospitals = useAction(api.osm.searchHospitals);
   const fetchRoads = useAction(api.osm.fetchRoads);
+  const fetchBuildings = useAction(api.osm.fetchBuildings);
   const saveOsmManifest = useMutation(api.simulations.saveOsmManifest);
 
   const onDispatch = async () => {
@@ -38,6 +39,7 @@ export default function DispatchPanel() {
       const res = await runDispatchFlow(patient, emergency.trim(), {
         fetchHospitals: (a) => searchHospitals(a),
         fetchRoads: (a) => fetchRoads(a),
+        fetchBuildings: (a) => fetchBuildings(a),
         saveManifest: (a) => saveOsmManifest(a),
         uncertainAsCritical: escalateUncertain,
       });
@@ -54,6 +56,7 @@ export default function DispatchPanel() {
         classification: res.classification ?? null,
         hospitals: res.candidates ?? [],
         selectedHospital: res.hospital ?? null,
+        dispatchHospital: res.dispatchHospital ?? null,
         networkSource: ctrl.graph.source,
         networkInfo: ctrl.events.find((e) => e.kind === "network")?.message ?? null,
         training: res.training ?? null,

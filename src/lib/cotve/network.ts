@@ -1,4 +1,4 @@
-import { settings, makeRng, trafficSettings } from "./config";
+import { settings, makeRng } from "./config";
 import { makeProjection, toLocal, toLatLng, dist, type Projection } from "./geo";
 import type {
   LatLng,
@@ -487,46 +487,6 @@ export function routeEstimatedTime(graph: RoadGraph, edgeIds: number[]): number 
   let t = 0;
   for (const id of edgeIds) t += graph.edgesById.get(id) ? edgeTravelTime(graph.edgesById.get(id)!) : 0;
   return t;
-}
-
-/** Simulated ambulance depots (labeled simulated): central-ish nodes away
- * from each other, snapped on real graph nodes. */
-export function pickDepots(graph: RoadGraph, count = 4): number[] {
-  const { minX, minY, maxX, maxY } = graph.bounds;
-  const cx = (minX + maxX) / 2;
-  const cy = (minY + maxY) / 2;
-  const sorted = [...graph.nodes].sort((a, b) => dist(a.x, a.y, cx, cy) - dist(b.x, b.y, cx, cy));
-  const far = sorted.filter((n) => dist(n.x, n.y, cx, cy) > 250);
-  const pool = far.length >= count ? far : sorted;
-  const picked: number[] = [];
-  for (const n of pool) {
-    if (picked.every((p) => dist(graph.nodesById.get(p)!.x, graph.nodesById.get(p)!.y, n.x, n.y) > 300)) {
-      picked.push(n.id);
-      if (picked.length === count) break;
-    }
-  }
-  return picked.length ? picked : [sorted[0].id];
-}
-
-export function buildingsForGraph(graph: RoadGraph, seed = settings.seed) {
-  const rng = makeRng(seed * 7 + 1);
-  const out: { x: number; y: number; w: number; d: number; h: number; rot: number }[] = [];
-  const { minX, minY, maxX, maxY } = graph.bounds;
-  const step = 30;
-  for (let x = minX + step; x < maxX; x += step) {
-    for (let y = minY + step; y < maxY; y += step) {
-      if (rng() < 0.5) continue;
-      let nearRoad = false;
-      for (const n of graph.nodes) {
-        if (dist(n.x, n.y, x, y) < 18) { nearRoad = true; break; }
-      }
-      if (nearRoad) continue;
-      out.push({ x: x + (rng() - 0.5) * 8, y: y + (rng() - 0.5) * 8, w: 8 + rng() * 10, d: 8 + rng() * 10, h: 4 + rng() * 14, rot: rng() * Math.PI });
-      if (out.length >= 900) return out;
-    }
-  }
-  void trafficSettings;
-  return out;
 }
 
 export { makeProjection };
