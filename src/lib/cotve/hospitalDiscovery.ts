@@ -46,7 +46,11 @@ export function parseOverpassHospitals(
     const tags = el.tags ?? {};
     const amenity = tags.amenity;
     const healthcare = tags.healthcare;
-    const isHospital = amenity === "hospital" || healthcare === "hospital" || amenity === "clinic";
+    const isHospital =
+      amenity === "hospital" ||
+      healthcare === "hospital" ||
+      amenity === "clinic" ||
+      healthcare === "clinic";
     if (!isHospital) continue;
     const lat = el.lat ?? el.center?.lat;
     const lng = el.lon ?? el.lng ?? el.center?.lon;

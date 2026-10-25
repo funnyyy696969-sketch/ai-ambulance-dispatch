@@ -1,4 +1,4 @@
-import type { RoadGraph } from "./types";
+import type { RoadGraph, RoadSnap } from "./types";
 import { edgeTravelTime, isTurnAllowed } from "./network";
 
 export interface PathResult {
@@ -127,6 +127,73 @@ export function closestNodeTo(graph: RoadGraph, x: number, y: number): number {
   for (const n of graph.nodes) {
     const d = Math.hypot(n.x - x, n.y - y);
     if (d < bd) { bd = d; best = n.id; }
+  }
+  return best;
+}
+
+export interface SnapTravel {
+  cost: number;
+  distance: number;
+}
+
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+
+/**
+ * Travel time/distance from a road-access SNAP POINT (hospital entrance,
+ * patient access) to node `dest`, honoring oneway direction and the
+ * along-edge offset.
+ *
+ * The vehicle sits ON edge e at arcPos: it may always continue FORWARD to
+ * e.to; it may travel back to e.from only when the road is two-way (a
+ * one-way forbids reversing). Measuring from e.from instead — the previous
+ * approach — ignores where on the edge the access point actually is and can
+ * rank a hospital that is physically nearest as the wrong dispatch origin.
+ *
+ * Returns null when no legal directed path exists from the access point.
+ */
+export function exitTimeFromSnap(graph: RoadGraph, snap: RoadSnap, dest: number): SnapTravel | null {
+  const e = graph.edgesById.get(snap.edgeId);
+  if (!e || e.blocked) return null;
+  const frac = e.length > 0 ? clamp01(snap.arcPos / e.length) : 0;
+  const tEdge = edgeTravelTime(e);
+  let best: SnapTravel | null = null;
+  const fwd = astar(graph, e.to, dest);
+  if (fwd) {
+    best = { cost: tEdge * (1 - frac) + fwd.cost, distance: e.length * (1 - frac) + fwd.distance };
+  }
+  if (!e.oneway) {
+    const bwd = astar(graph, e.from, dest);
+    if (bwd) {
+      const via: SnapTravel = { cost: tEdge * frac + bwd.cost, distance: e.length * frac + bwd.distance };
+      if (!best || via.cost < best.cost) best = via;
+    }
+  }
+  return best;
+}
+
+/**
+ * Travel time/distance from node `src` to a road-access SNAP POINT on edge e
+ * (the patient→hospital / approach side). Enter at e.from and drive `frac`
+ * of the edge — always legal; or, on two-way roads only, arrive via e.to
+ * and drive back the remaining part. Returns null when the access point is
+ * not legally reachable from src.
+ */
+export function approachTimeToSnap(graph: RoadGraph, src: number, snap: RoadSnap): SnapTravel | null {
+  const e = graph.edgesById.get(snap.edgeId);
+  if (!e || e.blocked) return null;
+  const frac = e.length > 0 ? clamp01(snap.arcPos / e.length) : 0;
+  const tEdge = edgeTravelTime(e);
+  let best: SnapTravel | null = null;
+  const viaFrom = astar(graph, src, e.from);
+  if (viaFrom) {
+    best = { cost: viaFrom.cost + tEdge * frac, distance: viaFrom.distance + e.length * frac };
+  }
+  if (!e.oneway) {
+    const viaTo = astar(graph, src, e.to);
+    if (viaTo) {
+      const via: SnapTravel = { cost: viaTo.cost + tEdge * (1 - frac), distance: viaTo.distance + e.length * (1 - frac) };
+      if (!best || via.cost < best.cost) best = via;
+    }
   }
   return best;
 }

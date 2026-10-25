@@ -29,11 +29,10 @@ export function buildFootprints(
   graph: RoadGraph,
 ): BuildingFootprint[] {
   const rng = makeRng(settings.seed * 13 + 5);
-  const out: BuildingFootprint[] = [];
+  const pending: { d2: number; fp: BuildingFootprint }[] = [];
   const { minX, minY, maxX, maxY } = graph.bounds;
 
   for (const b of raw) {
-    if (out.length >= buildingSettings.maxBuildings) break;
     const ring: LocalPt[] = [];
     for (const p of b.ring) {
       const l = toLocal(proj, p);
@@ -74,17 +73,25 @@ export function buildFootprints(
     }
     height = Math.max(3, Math.min(60, height));
 
-    out.push({
-      id: `b/${b.id}`,
-      ring,
-      height,
-      heightSource,
-      kind: b.building,
-      // type-based colour: homes warm, offices cool, etc. — varied, not random
-      colorIdx: colorForBuildingType(b.building, rng),
+    pending.push({
+      d2: cx * cx + cy * cy,
+      fp: {
+        id: `b/${b.id}`,
+        ring,
+        height,
+        heightSource,
+        kind: b.building,
+        // type-based colour: homes warm, offices cool, etc. — varied, not random
+        colorIdx: colorForBuildingType(b.building, rng),
+      },
     });
   }
-  return out;
+  // NEAREST-FIRST: Overpass returns buildings in arbitrary order, so a flat
+  // cap could drop the footprints right around the patient/route while keeping
+  // distant ones. Sort by distance from the study center before capping so
+  // the visible area is always populated.
+  pending.sort((a, b) => a.d2 - b.d2);
+  return pending.slice(0, buildingSettings.maxBuildings).map((p) => p.fp);
 }
 
 /**

@@ -13,12 +13,16 @@ import { action } from "./_generated/server";
  */
 
 const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
-// Mirrors, tried in order with a small backoff — makes the road/building fetch
-// far less likely to fall back to the demo grid (which caused 2D/3D mismatch).
+// Multiple public mirrors, tried over TWO rounds with escalating backoff.
+// Live probing (Oct 2026) observed back-to-back 502/429/504 across all
+// instances — the earlier single round silently produced demo-grid fallbacks
+// (the 2D-map-vs-3D-infrastructure mismatch users saw). Rounds make success
+// far more likely; failure still falls back to clearly-labeled demo data.
 const OVERPASS_MIRRORS = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter",
-  "https://overpass-api.de/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter",
+  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 ];
 
 const ROAD_TYPES = "motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street";
@@ -36,19 +40,22 @@ interface OverpassEl {
 
 async function overpass(query: string): Promise<{ elements: OverpassEl[] }> {
   let lastErr: Error | null = null;
-  for (const url of OVERPASS_MIRRORS) {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: `data=${encodeURIComponent(query)}`,
-      });
-      if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
-      return (await res.json()) as { elements: OverpassEl[] };
-    } catch (e) {
-      lastErr = e as Error;
-      // brief pause before the next mirror (429 rate limits clear quickly)
-      await new Promise((r) => setTimeout(r, 1200));
+  for (let round = 0; round < 2; round++) {
+    for (const url of OVERPASS_MIRRORS) {
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `data=${encodeURIComponent(query)}`,
+        });
+        if (!res.ok) throw new Error(`Overpass HTTP ${res.status} (${new URL(url).host})`);
+        return (await res.json()) as { elements: OverpassEl[] };
+      } catch (e) {
+        lastErr = e as Error;
+        // brief pause between mirrors; longer pause between rounds so 429
+        // rate limits can clear before retrying
+        await new Promise((r) => setTimeout(r, 1200 + round * 3000));
+      }
     }
   }
   throw lastErr ?? new Error("All Overpass endpoints failed");
@@ -67,9 +74,16 @@ export const searchHospitals = action({
   args: { lat: v.number(), lng: v.number(), radiusM: v.number() },
   handler: async (_ctx, { lat, lng, radiusM }) => {
     try {
+      // amenity=* covers the common tagging; healthcare=* is also queried
+      // because some facilities (e.g. government hospitals in Indian cities)
+      // are mapped ONLY with healthcare tags — omitting it silently dropped
+      // real hospitals from selection (verified: 3 misses at the default
+      // study center, including two major government hospitals).
       const q = `[out:json][timeout:25];(
         node["amenity"~"^(hospital|clinic)$"](around:${radiusM},${lat},${lng});
         way["amenity"~"^(hospital|clinic)$"](around:${radiusM},${lat},${lng});
+        node["healthcare"~"^(hospital|clinic)$"](around:${radiusM},${lat},${lng});
+        way["healthcare"~"^(hospital|clinic)$"](around:${radiusM},${lat},${lng});
       );out center tags;`;
       const data = await overpass(q);
       const elements = data.elements.map((el) => ({

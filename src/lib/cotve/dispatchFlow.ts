@@ -6,7 +6,7 @@ import {
 } from "./hospitalDiscovery";
 import { buildGraph, generateDemoGrid, snapToRoad, insertAccessNode, validateNetwork, nearestNode, type BuiltGraph } from "./network";
 import { buildFootprints, demoBuildings, type RawBuilding } from "./buildings";
-import { astar } from "./baselines";
+import { approachTimeToSnap, astar, exitTimeFromSnap } from "./baselines";
 import { settings, classifyCriticality, criticalityConfig, emergencyRules, type EmergencyKindLabel } from "./config";
 import { getController } from "./simulation";
 import type { Classification, HospitalCandidate, LatLng, NetworkValidation } from "./types";
@@ -192,12 +192,27 @@ export async function runDispatchFlow(
       excludedOffNetwork.push(c);
       continue;
     }
-    const targetNode = snap ? built.graph.edgesById.get(snap.edgeId)!.from : nearestNode(built.graph, lx, ly);
-    const path = astar(built.graph, patientAccessNode, targetNode);
-    c.scores = scoreHospital(c, kind, path ? path.cost : null, path ? path.distance : null);
-    // dispatch leg: hospital access node -> patient access node (directed)
-    const back = astar(built.graph, targetNode, patientAccessNode);
-    dispatchTime.set(c.id, back ? back.cost : Number.POSITIVE_INFINITY);
+    if (snap) {
+      // Real candidate with a road-access point. Both legs are measured
+      // FROM/TO the actual access point (along-edge offset + one-way
+      // direction aware). The previous implementation measured from the
+      // snapped edge's `from` junction, which overstates travel when the
+      // entrance sits mid/late on a long edge and reports reachable
+      // hospitals as unreachable against one-way exits — corrupting which
+      // hospital is picked as the ambulance's dispatch origin.
+      const approach = approachTimeToSnap(built.graph, patientAccessNode, snap);
+      c.scores = scoreHospital(c, kind, approach ? approach.cost : null, approach ? approach.distance : null);
+      const exit = exitTimeFromSnap(built.graph, snap, patientAccessNode);
+      dispatchTime.set(c.id, exit ? exit.cost : Number.POSITIVE_INFINITY);
+    } else {
+      // Demonstration hospital placeholder (outside the built network by
+      // design) — measured to its nearest junction.
+      const targetNode = nearestNode(built.graph, lx, ly);
+      const path = astar(built.graph, patientAccessNode, targetNode);
+      c.scores = scoreHospital(c, kind, path ? path.cost : null, path ? path.distance : null);
+      const back = astar(built.graph, targetNode, patientAccessNode);
+      dispatchTime.set(c.id, back ? back.cost : Number.POSITIVE_INFINITY);
+    }
     selectable.push(c);
   }
   if (excludedOffNetwork.length) {
@@ -231,12 +246,20 @@ export async function runDispatchFlow(
 
   // ---- hospital road access nodes (treatment + dispatch, may share) ----
   const accessFor = (c: HospitalCandidate, label: string): { node: number; access: import("./types").RoadSnap } => {
-    if (c.access) {
-      const node = insertAccessNode(built.graph, c.access, label);
-      return { node, access: { ...c.access } };
-    }
     const hx = (c.lng - built.projection.center.lng) * built.projection.mPerDegLng;
     const hy = (c.lat - built.projection.center.lat) * built.projection.mPerDegLat;
+    // ALWAYS re-snap against the CURRENT graph. Earlier insertAccessNode
+    // calls renumber every edge id (rebuildAdjacency), so a snap captured
+    // during candidate scoring is stale by now: inserting it would split an
+    // UNRELATED road at a meaningless offset and attach this access point to
+    // the wrong street — phantom geometry through buildings and an ambulance
+    // dispatching from a corrupted node. (Regression fixed here.)
+    const fresh = snapToRoad(built.graph, built.projection, hx, hy, settings.maxSnapM * 4);
+    if (fresh) {
+      const node = insertAccessNode(built.graph, fresh, label);
+      c.access = fresh;
+      return { node, access: { ...fresh } };
+    }
     const node = nearestNode(built.graph, hx, hy);
     const n = built.graph.nodesById.get(node)!;
     return { node, access: { edgeId: -1, arcPos: 0, x: n.x, y: n.y, lat: c.lat, lng: c.lng, distanceM: 0 } };
