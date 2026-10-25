@@ -38,8 +38,13 @@ export const settings = {
   /** route recalculated when A* on live traffic beats it by this ratio */
   recalcImprovementRatio: 1.2,
   recalcIntervalS: 8,
-  /** PPO quick-train budget (wall-clock ms) during dispatch */
-  ppoTrainBudgetMs: 1800,
+  /** PPO quick-train budget (wall-clock ms) during dispatch. 3000 ms: at
+   * 1800 ms a COLD (first-dispatch, JIT-warm) run reached only ~900 episodes
+   * and the rollout exceeded the step budget, forcing the honest A* fallback
+   * on the very first dispatch. 3000 ms reaches ~1700 episodes with the
+   * local-goal curriculum, so the first dispatch already routes via GNN+PPO
+   * (measured: 14 steps vs A* 11 edges, 20/20 goal reach). */
+  ppoTrainBudgetMs: 3000,
   ppoEpisodesPerBatch: 6,
   ppoMaxStepsPerEpisode: 260,
   /** abandon PPO and fall back to A* after this many steps relative to A* path */

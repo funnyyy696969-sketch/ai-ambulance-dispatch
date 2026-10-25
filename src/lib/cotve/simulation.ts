@@ -15,7 +15,7 @@ import type {
   TripMetrics,
 } from "./types";
 import { Projection } from "./geo";
-import { edgePoseAt, routeLength } from "./network";
+import { edgePoseAt, routeLength, routeEstimatedTime } from "./network";
 import {
   createRoutingContext,
   planRoutePpo,
@@ -379,7 +379,7 @@ export class SimulationController {
     }
   }
 
-  private rerouteFromCurrent(reason: string, dest: number): boolean {
+  private rerouteFromCurrent(reason: string, dest: number, requireImprovement = false): boolean {
     const a = this.ambulance!;
     const route = this.currentRoute!;
     const currentEdge = this.graph.edgesById.get(route.edgeIds[a.routeIdx])!;
@@ -393,6 +393,21 @@ export class SimulationController {
       this.log("error", this.errorMessage);
       this.syncLive();
       return false;
+    }
+    if (requireImprovement) {
+      // HYSTERESIS for traffic-triggered replans: only adopt the new route if
+      // it beats the CURRENT remaining route by the same ratio that triggered
+      // the check. Without this the check is permanently true whenever the
+      // policy is less efficient than A* (the A* comparison keeps firing),
+      // every replan replaced the route again, and the ambulance ping-ponged
+      // between junctions for thousands of simulated seconds without ever
+      // arriving (live-observed: 292 replans, nodes 81<->49). Rejected
+      // attempts leave the current route untouched, so accepted replans form
+      // a geometrically decreasing cost sequence — the loop terminates.
+      const oldCost = routeEstimatedTime(this.graph, route.edgeIds.slice(a.routeIdx + 1));
+      if (oldCost <= 0 || rest.estimatedTime > oldCost / settings.recalcImprovementRatio) {
+        return false; // not worth it — continue on the current route
+      }
     }
     const combined: PlannedRoute = {
       nodePath: [a.nodeId, ...rest.nodePath],
@@ -423,7 +438,7 @@ export class SimulationController {
     const e = cur !== undefined ? this.graph.edgesById.get(cur)! : null;
     if (!e) return;
     if (shouldRecalculate(this.graph, this.currentRoute, this.ambulance.routeIdx + 1, e.to, dest)) {
-      this.rerouteFromCurrent("traffic change made a faster connected route available", dest);
+      this.rerouteFromCurrent("traffic change made a faster connected route available", dest, true);
     }
   }
 

@@ -285,12 +285,28 @@ function concatInputs(inputs: Float32Array[]): Float32Array {
   return out;
 }
 
+/** Maximum norm of the MEAN batch gradient allowed per update. */
+const GRAD_CLIP = 1;
+
 /** PPO update: clipped surrogate + value MSE + entropy bonus. */
 function update(agent: PpoAgent, batch: Sample[]) {
+  // Advantages computed ONCE from the pre-update critic (standard PPO uses
+  // raw ret − V here): batch normalization is deliberately NOT applied —
+  // with a barely-trained critic whose predictions are near-constant, z-scoring
+  // flips the sign of every above/below-mean sample, turning "reinforce all
+  // actions of successful episodes" into a coin flip that actively destroyed
+  // the policy (measured: goal reach 20/20 → 0/20).
+  const advs = new Float64Array(batch.length);
+  for (let i = 0; i < batch.length; i++) {
+    advs[i] = batch[i].ret - agent.critic.forward(batch[i].criticIn, 0).s;
+  }
+
   for (let epoch = 0; epoch < 3; epoch++) {
     agent.actor.zeroGrad();
     agent.critic.zeroGrad();
-    for (const s of batch) {
+    for (let bi = 0; bi < batch.length; bi++) {
+      const s = batch[bi];
+      const adv = advs[bi];
       const scores: number[] = [];
       const caches: { s: number; a: Float32Array; x: Float32Array; xOff: number }[] = [];
       for (let k = 0; k < s.K; k++) {
@@ -303,10 +319,6 @@ function update(agent: PpoAgent, batch: Sample[]) {
       const probs = softmax(scores);
       const logProb = Math.log(Math.max(probs[s.action], 1e-8));
       const ratio = Math.exp(logProb - s.oldLogProb);
-      // advantage uses the pre-update critic pass (computed below with the
-      // same weights, evaluated once more for clarity)
-      const adv0 = s.ret - agent.critic.forward(s.criticIn, 0).s;
-      const adv = adv0;
       // clipped surrogate gradient
       let active = true;
       if (adv > 0 && ratio > 1 + CLIP_EPS) active = false;
@@ -330,9 +342,14 @@ function update(agent: PpoAgent, batch: Sample[]) {
       const vc = agent.critic.forward(s.criticIn.slice(), 0);
       agent.critic.backward(vc, VF_COEF * 2 * (vc.s - s.ret), CRITIC_IN);
     }
-    // gradient clip by norm (simple scale-down)
-    const norm = Math.max(agent.actor.gradNorm(), agent.critic.gradNorm());
-    const scale = norm > 5 ? 5 / norm : 1;
+    // Gradient clip — applied to the MEAN gradient, matching how apply()
+    // divides by batch size. The previous version clipped the SUMMED batch
+    // gradients against a fixed 5.0: with ~10^3-sample batches the effective
+    // update was pinned at ~1e-4 per batch no matter how large or consistent
+    // the signal was, so the network never actually learned (measured: the
+    // quick-trained policy produced routes identical to fresh random weights).
+    const meanNorm = Math.max(agent.actor.gradNorm(), agent.critic.gradNorm()) / Math.max(1, batch.length);
+    const scale = meanNorm > GRAD_CLIP ? GRAD_CLIP / meanNorm : 1;
     if (scale < 1) {
       for (const arr of [agent.actor.gW1, agent.actor.gb1, agent.actor.gw2, agent.actor.gb2, agent.critic.gW1, agent.critic.gb1, agent.critic.gw2, agent.critic.gb2]) {
         for (let i = 0; i < arr.length; i++) arr[i] *= scale;
@@ -371,7 +388,24 @@ export function quickTrain(
     let batchR = 0;
     for (let ep = 0; ep < settings.ppoEpisodesPerBatch; ep++) {
       const start = nodes[Math.floor(rng() * nodes.length)];
-      const goal = nodes[Math.floor(rng() * nodes.length)];
+      let goal = nodes[Math.floor(rng() * nodes.length)];
+      // Curriculum: ~70% of goals are LOCAL to the start (30 m … 40% of the
+      // network extent). Short, frequently-completed episodes let the dense
+      // distance-descent signal dominate the terminal ±5/±10 terms — exactly
+      // the greedy behaviour inference relies on. The remaining ~30% stay
+      // global so long-horizon credit assignment never disappears.
+      if (rng() < 0.7) {
+        const s = graph.nodesById.get(start)!;
+        const lo = 30;
+        const hi = Math.max(lo + 30, Math.min(maxDist * 0.4, 350));
+        for (let tries = 0; tries < 30; tries++) {
+          const c = nodes[Math.floor(rng() * nodes.length)];
+          if (c === start) continue;
+          const n = graph.nodesById.get(c)!;
+          const d = Math.hypot(n.x - s.x, n.y - s.y);
+          if (d >= lo && d <= hi) { goal = c; break; }
+        }
+      }
       ctx.dest = goal;
       if (start === goal) continue;
       const { samples, totalReward } = runEpisode(agent, ctx, start, rng, settings.ppoMaxStepsPerEpisode, true);
