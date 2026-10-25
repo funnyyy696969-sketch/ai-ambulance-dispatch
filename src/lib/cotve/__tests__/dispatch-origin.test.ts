@@ -17,7 +17,7 @@ import { generateDemoGrid, buildGraph } from "../network";
 import { approachTimeToSnap, astar, exitTimeFromSnap } from "../baselines";
 import { runDispatchFlow } from "../dispatchFlow";
 import { getController } from "../simulation";
-import { toLocal, makeProjection } from "../geo";
+import { toLocal } from "../geo";
 import type { LatLng, LocalPt, RoadGraph } from "../types";
 
 const center: LatLng = { lat: 13.0827, lng: 80.2707 };
@@ -96,9 +96,10 @@ describe("dispatch origin (stale edge-split regression)", () => {
     assertOutEdgesOnRoad(ctrl.graph, ctrl.depotNode, segs, "dispatch-hospital access");
 
     // ambulance physically departs from the dispatch hospital's access point
+    // (compare in the GRAPH's own projection frame — the demo grid is
+    // projected around the patient, not around `center`)
     const depot = ctrl.graph.nodesById.get(ctrl.depotNode)!;
-    const proj = makeProjection(center);
-    const hpt = toLocal(proj, { lat: nearH.lat, lng: nearH.lng });
+    const hpt = toLocal(ctrl.projection, { lat: nearH.lat, lng: nearH.lng });
     expect(Math.hypot(depot.x - hpt.x, depot.y - hpt.y)).toBeLessThan(150);
   });
 });

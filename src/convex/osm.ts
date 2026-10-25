@@ -27,6 +27,16 @@ const OVERPASS_MIRRORS = [
 
 const ROAD_TYPES = "motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street";
 
+// Public Overpass instances REJECT requests with a default/blank User-Agent
+// (live-verified Oct 2026: HTTP 429 "Please include a meaningful User-Agent").
+// A descriptive UA identifying the research project fixes that class of
+// failures outright.
+const USER_AGENT =
+  "CoTV-E/1.0 (academic emergency-ambulance routing and traffic-signal-priority research)";
+// Per-attempt ceiling so a queued/hung mirror cycles to the next one instead
+// of stalling the whole fetch (some mirrors queue requests under load).
+const ATTEMPT_TIMEOUT_MS = 45_000;
+
 interface OverpassEl {
   type: string;
   id: number;
@@ -45,8 +55,12 @@ async function overpass(query: string): Promise<{ elements: OverpassEl[] }> {
       try {
         const res = await fetch(url, {
           method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": USER_AGENT,
+          },
           body: `data=${encodeURIComponent(query)}`,
+          signal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
         });
         if (!res.ok) throw new Error(`Overpass HTTP ${res.status} (${new URL(url).host})`);
         return (await res.json()) as { elements: OverpassEl[] };

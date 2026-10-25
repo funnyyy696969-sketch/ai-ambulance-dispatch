@@ -24,14 +24,22 @@ function check(name: string, cond: boolean, detail = "") {
 const OVERPASS = "https://overpass-api.de/api/interpreter";
 const MIRROR = "https://overpass.kumi.systems/api/interpreter";
 
+// Public Overpass instances reject default/blank User-Agents with HTTP 429
+// ("Please include a meaningful User-Agent" — live-verified Oct 2026), and
+// may queue a request indefinitely under load. Descriptive UA + per-attempt
+// timeout so mirrors cycle instead of hanging the smoke run.
+const UA = "CoTV-E/1.0 (academic emergency-ambulance routing research smoke-test)";
+const ATTEMPT_TIMEOUT_MS = 55_000;
+
 async function overpass(q: string) {
   let lastErr: Error | null = null;
   for (const url of [OVERPASS, MIRROR, OVERPASS]) {
     try {
       const res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": UA },
         body: `data=${encodeURIComponent(q)}`,
+        signal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
       });
       if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
       return (await res.json()) as { elements: { type: string; id: number; lat?: number; lon?: number; center?: { lat: number; lon: number }; geometry?: { lat: number; lon: number }[]; tags?: Record<string, string>; members?: { type: string; role: string; ref: number }[] }[] };
