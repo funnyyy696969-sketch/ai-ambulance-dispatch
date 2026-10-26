@@ -155,21 +155,24 @@ export const fetchRoads = action({
   args: { lat: v.number(), lng: v.number(), radiusM: v.number() },
   handler: async (_ctx, { lat, lng, radiusM }) => {
     try {
-      // 1. full way geometry (junction-or-not points preserved)
-      const q = `[out:json][timeout:30];way["highway"~"^(${ROAD_TYPES})$"](around:${radiusM},${lat},${lng});out geom tags;`;
+      // 1. full way geometry (junction-or-not points preserved) MERGED with
+      //    2. REAL OSM traffic-signal nodes in the same radius — one Overpass
+      //    round trip instead of two. Each public-mirror call can take ~30 s
+      //    and carries its own 429/timeout risk; halving the calls shortens
+      //    dispatch startup and reduces the intermittent failures that used to
+      //    silently produce a demo grid in 3D while the 2D map kept showing
+      //    real tiles (the "infrastructure doesn't match" symptom). Verified
+      //    against live Overpass: `out geom tags` returns lat/lon for nodes.
+      const q = `[out:json][timeout:30];(
+        way["highway"~"^(${ROAD_TYPES})$"](around:${radiusM},${lat},${lng});
+        node["highway"="traffic_signals"](around:${radiusM},${lat},${lng});
+      );out geom tags;`;
       const data = await overpass(q);
-      // 2. REAL OSM traffic-signal nodes in the same radius
-      const qSignals = `[out:json][timeout:25];node["highway"="traffic_signals"](around:${radiusM},${lat},${lng});out body;`;
       const signalCoords = new Set<string>();
-      try {
-        const sigData = await overpass(qSignals);
-        for (const el of sigData.elements) {
-          if (el.lat !== undefined && el.lon !== undefined) {
-            signalCoords.add(`${el.lat.toFixed(5)}:${el.lon.toFixed(5)}`);
-          }
+      for (const el of data.elements) {
+        if (el.type === "node" && el.lat !== undefined && el.lon !== undefined) {
+          signalCoords.add(`${el.lat.toFixed(5)}:${el.lon.toFixed(5)}`);
         }
-      } catch {
-        // signals are an enhancement, not a requirement — absence is reported
       }
       // 3. REAL turn restrictions (relations), via-node coords resolved in batch
       const restrictions: { viaLat: number; viaLng: number; fromWay: number; toWay: number; restriction: string }[] = [];

@@ -12,8 +12,8 @@
  *     (old query vs healthcare-tag query), buildings.
  *  2. Hospital coverage: hospitals tagged healthcare=* only that the current
  *     amenity-only query MISSES.
- *  3. Dispatch-origin: compares the current metric (A* from snapped edge's
- *     from-node) with an offset-aware metric, vs actual chosen origin.
+ *  3. Dispatch-origin: compares the legacy flat metric (A* from the snapped
+ *     edge's from-node) with the app's offset-aware metric, vs actual origin.
  *  4. Graph integrity: access-node edges must lie on raw OSM ways (catches
  *     stale-edge splits that attach access nodes to the wrong road).
  *  5. Map alignment: every route-polyline point must lie on a raw OSM way.
@@ -94,12 +94,12 @@ async function main() {
   let hospOld: any[] = [];
   let hospNew: any[] = [];
   try {
-    hospOld = (await overpass(hospOldQ, "hospitals (amenity-only, CURRENT)")).elements;
+    hospOld = (await overpass(hospOldQ, "hospitals (amenity-only, legacy query)")).elements;
   } catch (e) {
     console.log(`  hospital query failed: ${e}`);
   }
   try {
-    hospNew = (await overpass(hospNewQ, "hospitals (amenity+healthcare, PROPOSED)")).elements;
+    hospNew = (await overpass(hospNewQ, "hospitals (amenity+healthcare, app query)")).elements;
   } catch {
     /* reported below */
   }
@@ -107,7 +107,7 @@ async function main() {
   const oldKeys = new Set(hospOld.map(key));
   const missed = hospNew.filter((el) => !oldKeys.has(key(el)));
   const missedHealthcareOnly = missed.filter((el) => (el.tags?.amenity ?? "") === "" && (el.tags?.healthcare ?? "") !== "");
-  console.log(`  -> amenity-only: ${hospOld.length}; with healthcare tags: ${hospNew.length}; MISSED by current query: ${missed.length} (${missedHealthcareOnly.length} healthcare-only)`);
+  console.log(`  -> amenity-only: ${hospOld.length}; with healthcare tags (what the app queries): ${hospNew.length}; MISSED by the legacy amenity-only query: ${missed.length} (${missedHealthcareOnly.length} healthcare-only)`);
   if (missedHealthcareOnly.length) {
     for (const el of missedHealthcareOnly.slice(0, 5)) {
       const c = el.center ?? el;
@@ -196,10 +196,10 @@ async function main() {
     if (snap) {
       const e = g.edgesById.get(snap.edgeId);
       if (e) {
-        // CURRENT metric: A* from the snapped edge's from-node only
+        // LEGACY flat metric: A* from the snapped edge's from-node only
         const a = astar(g, e.from, ctrl.patientNode);
         cur = a ? a.cost : null;
-        // FIXED metric: direction-aware, offset-aware.
+        // APP metric (baselines.exitTimeFromSnap): direction- and offset-aware.
         // dispatch leg = hospital access point -> patient node. From the access
         // point on edge e, the ambulance can only travel FORWARD toward e.to
         // (oneway or not — you cannot reverse); if the road is two-way it may
