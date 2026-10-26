@@ -767,8 +767,10 @@ function CitySceneInner({ zoomRef }: { zoomRef: React.MutableRefObject<number> }
         </mesh>
       </group>
 
-      {/* ambulance: body + cabin + wheels + light bar + red cross */}
-      <group ref={ambRef} visible={false}>
+      {/* ambulance: body + cabin + wheels + light bar + red cross.
+           Scaled 0.72 so the vehicle reads SMALL relative to the road width
+           (a 4.6 m body visually swallowed a 4 m residential street). */}
+      <group ref={ambRef} visible={false} scale={0.72}>
         <mesh position={[0, 1.2, 0]}>
           <boxGeometry args={[4.6, 1.7, 2.1]} />
           <meshBasicMaterial color="#f8fafc" />

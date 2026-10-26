@@ -150,9 +150,11 @@ export default function Dispatch() {
         </div>
       </main>
 
-      {/* bottom status panel: live emergency-response readout */}
-      <footer className="border-t border-border bg-card px-4 py-2">
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs">
+      {/* bottom status panel: live emergency-response readout.
+           sticky so it is ALWAYS visible on any window size (it used to sit
+           below the fold and clip chips on smaller screens). */}
+      <footer className="sticky bottom-0 z-20 border-t border-border bg-card px-3 py-2 shadow-[0_-4px_12px_rgba(0,0,0,0.06)] sm:px-4">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs sm:gap-x-5">
           <StatusChip label="Status" value={status?.ambulanceStatus ?? "standby"} strong accent="text-red-600" />
           <StatusChip label="Speed" value={`${speedKmh.toFixed(0)} km/h`} mono />
           <StatusChip label="To patient" value={distPatient} mono />
@@ -203,9 +205,10 @@ function StatusChip({
   accent?: string;
 }) {
   return (
-    <span className="flex items-baseline gap-1.5 whitespace-nowrap">
-      <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</span>
-      <span className={`${mono ? "font-mono" : ""} ${strong ? "font-semibold" : ""} ${accent ?? "text-foreground"}`}>
+    <span className="flex max-w-full items-baseline gap-1.5">
+      <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">{label}</span>
+      {/* long values wrap inside the chip instead of overflowing the bar */}
+      <span className={`${mono ? "font-mono" : ""} ${strong ? "font-semibold" : ""} ${accent ?? "text-foreground"} min-w-0 break-words`}>
         {value}
       </span>
     </span>

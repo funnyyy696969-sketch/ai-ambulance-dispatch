@@ -9,6 +9,12 @@ import { useSimStore } from "@/lib/cotve/store";
 
 type CamMode = "follow" | "elevated" | "top";
 
+/** Camera mode + zoom persist at MODULE level (not component state) so a
+ * manual adjustment survives remounts — returning to the page (route
+ * navigation back to the map) used to silently reset the view to "follow". */
+let gCamMode: CamMode = "follow";
+let gZoom = 1;
+
 function FollowCamera({ modeRef, zoomRef }: { modeRef: React.MutableRefObject<CamMode>; zoomRef: React.MutableRefObject<number> }) {
   const ctrl = getController();
   const { camera } = useThree();
@@ -57,9 +63,14 @@ function FollowCamera({ modeRef, zoomRef }: { modeRef: React.MutableRefObject<Ca
 }
 
 export default function SimViewAmbulance() {
-  const modeRef = useRef<CamMode>("follow");
-  const zoomRef = useRef(1);
-  const [mode, setMode] = useState<CamMode>("follow");
+  const modeRef = useRef<CamMode>(gCamMode);
+  const zoomRef = useRef(gZoom);
+  const [mode, setMode] = useState<CamMode>(gCamMode);
+  const selectMode = (m: CamMode) => {
+    gCamMode = m;
+    modeRef.current = m;
+    setMode(m);
+  };
   const status = useSimStore((s) => s.status);
   // HUD refreshes with the 4 Hz store sync; read speed from the live frame
   const liveSpeed = getController().live.ambulance ? getController().live.ambulance!.speed * 3.6 : 0;
@@ -69,6 +80,7 @@ export default function SimViewAmbulance() {
       className="relative h-full w-full overflow-hidden rounded-lg border border-border bg-[#cfe6f5]"
       onWheel={(e) => {
         zoomRef.current = Math.min(3, Math.max(0.4, zoomRef.current + e.deltaY * 0.001));
+        gZoom = zoomRef.current;
       }}
     >
       <Canvas dpr={[1, 1.5]} gl={{ antialias: false, powerPreference: "low-power" }} camera={{ fov: 55, near: 0.5, far: 4000, position: [0, 120, 200] }}>
@@ -82,10 +94,7 @@ export default function SimViewAmbulance() {
         {(["follow", "elevated", "top"] as CamMode[]).map((m) => (
           <button
             key={m}
-            onClick={() => {
-              modeRef.current = m;
-              setMode(m);
-            }}
+            onClick={() => selectMode(m)}
             className={`rounded px-2 py-1 text-[11px] capitalize transition-colors ${
               mode === m ? "bg-red-600 text-white" : "bg-black/55 text-slate-300 hover:bg-black/75"
             }`}
@@ -95,7 +104,7 @@ export default function SimViewAmbulance() {
         ))}
       </div>
 
-      <div className="pointer-events-none absolute bottom-3 left-3 flex items-center gap-4 rounded-md bg-black/60 px-3 py-1.5 font-mono text-xs text-slate-200">
+      <div className="pointer-events-none absolute bottom-3 left-3 flex max-w-[calc(100%-1.5rem)] flex-wrap items-center gap-x-4 gap-y-1 rounded-md bg-black/60 px-3 py-1.5 font-mono text-xs text-slate-200">
         <span className="flex items-center gap-1"><AmbulanceIcon className="h-3.5 w-3.5 text-red-400" />{status?.ambulanceStatus ?? "standby"}</span>
         <span className="flex items-center gap-1"><Gauge className="h-3.5 w-3.5 text-cyan-400">{/* km/h */}</Gauge>{liveSpeed.toFixed(0)} km/h</span>
         <span className="flex items-center gap-1"><Timer className="h-3.5 w-3.5 text-amber-400" />{status?.etaPatient != null ? `ETA pt ${status.etaPatient.toFixed(0)}s` : status?.etaHospital != null ? `ETA hosp ${status.etaHospital.toFixed(0)}s` : "—"}</span>

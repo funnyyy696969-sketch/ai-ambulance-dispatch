@@ -42,7 +42,23 @@ export default function DispatchPanel() {
       );
       return;
     }
-    setStore({ dispatching: true, saved: false, training: null, emergencyText: finalEmergency });
+    setStore({
+      dispatching: true,
+      saved: false,
+      training: null,
+      emergencyText: finalEmergency,
+      // drop the PREVIOUS run's results immediately so the hospital, route
+      // and access points can never linger on the map/dashboard while a new
+      // dispatch is being computed (they are replaced on success).
+      selectedHospital: null,
+      dispatchHospital: null,
+      hospitals: [],
+      routeLatLngs: [],
+      patientAccessLatLng: null,
+      hospitalAccessLatLng: null,
+      blockedPolys: [],
+      depotLatLng: null,
+    });
     try {
       const res = await runDispatchFlow(patient, finalEmergency, {
         fetchHospitals: (a) => searchHospitals(a),
@@ -97,7 +113,7 @@ export default function DispatchPanel() {
           <SelectTrigger className="w-full">
             <SelectValue placeholder="Select emergency type" />
           </SelectTrigger>
-          <SelectContent className="max-h-72">
+          <SelectContent position="popper" align="start" sideOffset={4} className="max-h-72">
             {emergencyCategories.map((label) => (
               <SelectItem key={label} value={label}>
                 {label}
@@ -121,19 +137,28 @@ export default function DispatchPanel() {
           Escalation policy: treat UNCLASSIFIED emergencies as critical
         </label>
       </div>
-      {classification && (
-        <div className={`rounded-md border px-3 py-2 text-xs ${
-          classification.criticality === "critical" ? "border-red-500/50 bg-red-50 text-red-800" :
-          classification.criticality === "non-critical" ? "border-emerald-500/50 bg-emerald-50 text-emerald-800" :
-          "border-amber-500/50 bg-amber-50 text-amber-800"
-        }`}>
-          <div className="font-semibold uppercase">{classification.criticality}</div>
-          <div className="mt-0.5 text-[11px] opacity-90">{classification.notes}</div>
-          {classification.criticality !== "critical" && (
-            <div className="mt-1 text-[11px]">Emergency signal priority stays OFF for this class.</div>
-          )}
-        </div>
-      )}
+      {/* fixed-height slots: the panel must not grow/shrink while dispatching
+          or when the classification arrives (it used to reflow the whole
+          dashboard below every time) */}
+      <div className="min-h-[72px]">
+        {classification ? (
+          <div className={`rounded-md border px-3 py-2 text-xs ${
+            classification.criticality === "critical" ? "border-red-500/50 bg-red-50 text-red-800" :
+            classification.criticality === "non-critical" ? "border-emerald-500/50 bg-emerald-50 text-emerald-800" :
+            "border-amber-500/50 bg-amber-50 text-amber-800"
+          }`}>
+            <div className="font-semibold uppercase">{classification.criticality}</div>
+            <div className="mt-0.5 text-[11px] opacity-90">{classification.notes}</div>
+            {classification.criticality !== "critical" && (
+              <div className="mt-1 text-[11px]">Emergency signal priority stays OFF for this class.</div>
+            )}
+          </div>
+        ) : (
+          <div className="rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+            Criticality classification appears here after dispatch (keyword policy — not a clinical diagnosis).
+          </div>
+        )}
+      </div>
       <Button
         onClick={onDispatch}
         disabled={dispatching || status?.phase === "to-patient" || status?.phase === "pickup" || status?.phase === "to-hospital"}
@@ -143,12 +168,14 @@ export default function DispatchPanel() {
         <Siren className="mr-2 h-4 w-4" />
         {dispatching ? "DISPATCHING…" : "DISPATCH AMBULANCE"}
       </Button>
-      {dispatching && (
-        <div className="rounded-md border border-amber-500/50 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          Fetching OpenStreetMap data, discovering hospitals, quick-training the PPO agent…
-          {training === null && <span className="ml-1 animate-pulse">⣾</span>}
-        </div>
-      )}
+      <div className="min-h-[40px]">
+        {dispatching && (
+          <div className="rounded-md border border-amber-500/50 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            Fetching OpenStreetMap data, discovering hospitals, quick-training the PPO agent…
+            {training === null && <span className="ml-1 animate-pulse">⣾</span>}
+          </div>
+        )}
+      </div>
       {status?.phase === "error" && status.errorMessage && (
         <div className="flex items-start gap-2 rounded-md border border-red-500/50 bg-red-50 px-3 py-2 text-xs text-red-800">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />

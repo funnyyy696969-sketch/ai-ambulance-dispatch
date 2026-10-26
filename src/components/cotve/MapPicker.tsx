@@ -73,6 +73,28 @@ export default function MapPicker() {
   const setStatus = useSimStore((s) => s.set);
 
   const onPick = (lat: number, lng: number) => {
+    const prev = useSimStore.getState().patient;
+    const changed =
+      !prev || Math.abs(prev.lat - lat) > 1e-7 || Math.abs(prev.lng - lng) > 1e-7;
+    const phase = getController().phase;
+    const idle = phase === "idle" || phase === "complete" || phase === "error";
+    if (changed && idle) {
+      // a NEW patient invalidates the previous run's results — clear the
+      // stale hospital selection, route and access points so the map never
+      // keeps showing a hospital that belongs to the old location
+      setStatus({
+        patient: { lat, lng },
+        selectedHospital: null,
+        dispatchHospital: null,
+        routeLatLngs: [],
+        patientAccessLatLng: null,
+        hospitalAccessLatLng: null,
+        blockedPolys: [],
+        classification: null,
+        saved: false,
+      });
+      return;
+    }
     setStatus({ patient: { lat, lng } });
   };
 

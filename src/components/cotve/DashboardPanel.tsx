@@ -166,33 +166,48 @@ export default function DashboardPanel() {
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <CardTitle className="text-base">Control dashboard</CardTitle>
-          <div className="flex items-center gap-2">
-            <Badge variant={phaseVariant(status?.phase)} className="font-mono text-[10px] uppercase">
-              {status?.phase ?? "standby"}
-            </Badge>
-            {(status?.phase === "to-patient" || status?.phase === "to-hospital") && <SimulateAccidentButton />}
-            {complete && (
-              <>
-                <Button size="sm" variant="outline" onClick={downloadCsv}>
-                  <Download className="mr-1 h-3.5 w-3.5" /> CSV
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    ctrl.reset();
-                    setStore({ status: ctrl.status(), metrics: ctrl.metrics, saved: false, routeLatLngs: [] });
-                  }}
-                >
-                  <RotateCcw className="mr-1 h-3.5 w-3.5" /> Reset
-                </Button>
-              </>
-            )}
-          </div>
+          <Badge variant={phaseVariant(status?.phase)} className="font-mono text-[10px] uppercase">
+            {status?.phase ?? "standby"}
+          </Badge>
         </div>
-        {status && status.phase !== "idle" && status.phase !== "error" && (
-          <Progress value={status.progressPct} className="mt-2 h-1.5" />
-        )}
+        {/* actions live on their OWN always-rendered row: the header height is
+            constant from first paint, so nothing below ever reflows when the
+            journey starts, completes or is reset */}
+        <div className="mt-2 flex h-8 items-center gap-2">
+          <SimulateAccidentButton />
+          <Button size="sm" variant="outline" onClick={downloadCsv} disabled={!complete}>
+            <Download className="mr-1 h-3.5 w-3.5" /> CSV
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!complete}
+            onClick={() => {
+              ctrl.reset();
+              setStore({
+                status: ctrl.status(),
+                metrics: ctrl.metrics,
+                saved: false,
+                routeLatLngs: [],
+                // full stale-state clear: the hospital/access/route of the
+                // finished trip must not survive a reset (it used to keep
+                // showing the old hospital after returning to the map)
+                selectedHospital: null,
+                dispatchHospital: null,
+                hospitals: [],
+                patientAccessLatLng: null,
+                hospitalAccessLatLng: null,
+                blockedPolys: [],
+                classification: null,
+                depotLatLng: null,
+                training: null,
+              });
+            }}
+          >
+            <RotateCcw className="mr-1 h-3.5 w-3.5" /> Reset
+          </Button>
+        </div>
+        <Progress value={status?.progressPct ?? 0} className="mt-2 h-1.5" />
       </CardHeader>
       <CardContent className="flex-1 overflow-hidden">
         <Tabs value={tab} onValueChange={setTab} className="flex h-full flex-col">
@@ -230,7 +245,7 @@ export default function DashboardPanel() {
           <TabsContent value="metrics" className="mt-3 space-y-3 overflow-y-auto">
             {metrics && metrics.totalTime > 0 ? (
               <>
-                <div className="grid grid-cols-2 gap-2 text-sm">
+                <div className="grid grid-cols-2 gap-2 text-sm [grid-auto-rows:1fr]">
                   <MetricTile label="Response time" value={fmt(metrics.responseTime)} />
                   <MetricTile label="Pickup (simulated)" value={fmt(metrics.pickupDuration)} />
                   <MetricTile label="Transport time" value={fmt(metrics.transportTime)} />
@@ -391,9 +406,12 @@ export default function DashboardPanel() {
 
 function MetricTile({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-border bg-muted/40 px-2.5 py-2">
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="font-mono text-sm font-semibold">{value}</div>
+    // label block is bottom-padded to a fixed height so every VALUE in the
+    // grid sits on the same baseline — tiles used to misalign vertically
+    // whenever a label wrapped to a second line
+    <div className="flex h-full flex-col justify-between rounded-md border border-border bg-muted/40 px-2.5 py-2">
+      <div className="min-h-[24px] text-[10px] leading-tight uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="mt-1 font-mono text-sm leading-none font-semibold">{value}</div>
     </div>
   );
 }
