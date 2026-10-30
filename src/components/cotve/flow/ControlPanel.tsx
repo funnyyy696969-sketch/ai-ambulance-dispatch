@@ -165,7 +165,6 @@ export default function ControlPanel({
           />
           <div className="flex justify-between text-[9px] text-slate-500">
             <span>0</span>
-            <span>step forward only</span>
             <span>{STEP_HORIZON}</span>
           </div>
         </div>
