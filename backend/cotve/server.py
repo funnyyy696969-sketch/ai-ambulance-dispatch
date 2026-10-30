@@ -46,7 +46,8 @@ class ScenarioIn(BaseModel):
     cols: int = 5
     spacing: float = 300.0
     seed: int = 7
-    demand: float = 1.0
+    demand: float = 0.75
+    lanes: int = 2
     nAmbulances: int = 2
     nHospitals: int = 3
     originLat: float = 12.9716
@@ -118,6 +119,7 @@ def set_scenario(body: ScenarioIn) -> dict:
             spacing=body.spacing,
             seed=body.seed,
             demand=body.demand,
+            lanes=body.lanes,
             n_ambulances=body.nAmbulances,
             n_hospitals=body.nHospitals,
             origin=(body.originLat, body.originLng),
@@ -214,7 +216,11 @@ def evaluate(body: EvaluationIn) -> dict:
     params.pop("graph", None)
     xy = (body.accidentX, body.accidentY) if body.accidentX is not None else None
     out = run_comparison(
-        params=params, accident_xy=xy, methods=methods, emergency=body.emergency
+        params=params,
+        accident_xy=xy,
+        methods=methods,
+        runs=max(1, min(int(body.runs or 1), 4)),
+        emergency=body.emergency,
     )
     return out
 

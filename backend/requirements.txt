@@ -1,0 +1,12 @@
+# CoTV-E / CityFlow backend
+#
+#   pip install -r requirements.txt
+#
+# CityFlow itself is NOT on PyPI - it is installed from source, see README.md
+# (Windows/macOS/Linux instructions in the same file).
+
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.27,<1.0
+websockets>=12.0
+pydantic>=2.6,<3.0
+numpy>=1.24,<3.0

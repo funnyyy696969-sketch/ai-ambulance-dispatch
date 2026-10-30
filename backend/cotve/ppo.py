@@ -16,6 +16,7 @@ CityFlow network, so what it optimises is the current traffic state.
 
 from __future__ import annotations
 
+import heapq
 import math
 import time
 
@@ -350,30 +351,61 @@ def plan_ppo(
     start_xy = net.roads[start].points[-1]
     initial_rem = math.hypot(start_xy[0] - goal_xy[0], start_xy[1] - goal_xy[1]) / MAX_SPEED or 1.0
 
-    u = start
-    visited = {start}
-    path = [start]
-    for _ in range(len(net.roads)):
-        cands = [v for v, _ in net.successors(u) if v not in visited]
+    def heuristic(rid: str) -> float:
+        p = net.roads[rid].points[-1]
+        return math.hypot(p[0] - goal_xy[0], p[1] - goal_xy[1]) / MAX_SPEED
+
+    # Best-first search whose edge weights are reshaped by the PPO actor:
+    #   w(u,v) = live_cost(u,v) * (1 + (1 - p(v)))
+    # where p is the policy's softmax preference among u's successors, so a
+    # link the (GNN-embedded, goal-conditioned) policy likes is up to twice as
+    # cheap as one it rejects.  Unlike a pure argmax rollout this cannot fall
+    # into a dead end, so it keeps the reachability guarantee of a shortest
+    # path search while still being the policy that picks the corridor.
+    heap: list[tuple[float, float, str, list[str]]] = []
+    best: dict[str, float] = {start: 0.0}
+    heapq.heappush(heap, (heuristic(start), 0.0, start, [start]))
+    seen: set[str] = set()
+    budget = 6 * len(net.roads) + 60
+    pops = 0
+    while heap and pops <= budget:
+        _f, g, u, path = heapq.heappop(heap)
+        if u in seen:
+            continue
+        seen.add(u)
+        pops += 1
+        if u == goal:
+            return path, {
+                "fallback": False,
+                "used": "ppo",
+                "steps": len(path) - 1,
+                "cost": round(g, 1),
+                "explored": pops,
+            }
+        cands = [v for v, _ in net.successors(u) if v not in seen]
         if not cands:
-            break
+            continue
         f = np.stack(
             [
                 PPOAgent.actor_features(
-                    emb, x_e, road_index, node_index, net, u, v, goal, initial_rem, goal_xy, visited
+                    emb, x_e, road_index, node_index, net, u, v, goal, initial_rem, goal_xy, set(path)
                 )
                 for v in cands
             ]
         )
         logits = agent.logits(f)
-        nxt = cands[int(np.argmax(logits))]
-        path.append(nxt)
-        visited.add(nxt)
-        u = nxt
-        if u == goal:
-            return path, {"fallback": False, "used": "ppo", "steps": len(path) - 1}
+        logits = logits - logits.max()
+        probs = np.exp(logits)
+        probs = probs / max(probs.sum(), 1e-9)
+        for v, p in zip(cands, probs):
+            w = cost(v) * (1.0 + float(1.0 - p))
+            ng = g + w
+            if ng >= best.get(v, float("inf")):
+                continue
+            best[v] = ng
+            heapq.heappush(heap, (ng + heuristic(v), ng, v, path + [v]))
 
     fb = dijkstra(net, start, goal, cost)
     if fb is None:
         return None, {"fallback": True, "used": "unreachable"}
-    return fb, {"fallback": True, "used": "dijkstra-fallback", "policyLen": len(path) - 1}
+    return fb, {"fallback": True, "used": "dijkstra-fallback", "explored": pops}

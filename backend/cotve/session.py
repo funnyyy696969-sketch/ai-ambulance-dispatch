@@ -26,7 +26,7 @@ from .flows import ambulance_template, generate_flows
 from .gnn import GNN
 from .ppo import PPOAgent, plan_ppo, quick_train
 from .roadnet import MAX_SPEED, GeoTransform, Network, build_graph, build_grid, pick_facilities
-from .routing import astar, dijkstra, live_cost, path_distance, path_time
+from .routing import astar, dijkstra, freeflow_cost, live_cost, path_distance, path_time
 from .signals import SignalController
 
 INTERVAL = 0.2  # seconds of simulated time per engine step
@@ -61,6 +61,9 @@ class Ambulance:
     speed: float = 0.0
     pending: bool = False
     spawned: bool = False
+    watch_road: str | None = None  # road the accident / hospital sits on
+    saw_watch: bool = False
+    passed_target: bool = False
     error: str | None = None
     eta_s: float | None = None
 
@@ -96,7 +99,8 @@ class SimSession:
         cols: int = 5,
         spacing: float = 300.0,
         seed: int = 7,
-        demand: float = 1.0,
+        demand: float = 0.75,
+        lanes: int = 2,
         n_ambulances: int = 2,
         n_hospitals: int = 3,
         origin: tuple[float, float] = (12.9716, 77.5946),
@@ -112,7 +116,8 @@ class SimSession:
         self.origin = origin
         self.params = dict(
             rows=rows, cols=cols, spacing=spacing, seed=seed, demand=demand,
-            n_ambulances=n_ambulances, n_hospitals=n_hospitals, graph=graph,
+            lanes=lanes, n_ambulances=n_ambulances, n_hospitals=n_hospitals,
+            graph=graph,
         )
         self.geo = GeoTransform(*origin)
 
@@ -120,7 +125,7 @@ class SimSession:
             self.net: Network = build_graph(graph["nodes"], graph["edges"], self.geo)
             self.scenario_name = graph.get("name", "osm")
         else:
-            self.net = build_grid(rows=rows, cols=cols, spacing=spacing, geo=self.geo)
+            self.net = build_grid(rows=rows, cols=cols, spacing=spacing, n_lanes=lanes, geo=self.geo)
             self.scenario_name = "grid"
 
         self.hospitals = pick_facilities(self.net, n_hospitals, "hospital")
@@ -446,15 +451,39 @@ class SimSession:
         return live_cost(self.net, self.road_speed, self.road_count)
 
     def _plan(self, method: str, start: str, goal: str) -> tuple[list[str] | None, dict]:
-        cost = self._cost()
+        # three genuinely different planners: Dijkstra on static free-flow cost
+        # (what a non-adaptive navigator does), A* on the live cost with an
+        # admissible heuristic, and GNN+PPO where the learned policy reshapes
+        # the live cost of every link
         if method == "dijkstra":
-            return dijkstra(self.net, start, goal, cost), {"fallback": False, "used": "dijkstra"}
+            return dijkstra(self.net, start, goal, freeflow_cost(self.net)), {
+                "fallback": False, "used": "dijkstra"
+            }
         if method == "astar":
-            return astar(self.net, start, goal, cost), {"fallback": False, "used": "astar"}
+            # A* runs on the live cost with an admissible heuristic: a
+            # stronger, still classical baseline than plain Dijkstra
+            return astar(self.net, start, goal, self._cost()), {
+                "fallback": False, "used": "astar"
+            }
+        cost = self._cost()
         path, info = plan_ppo(self.net, self.gnn, self.agent, self.emb, self.x_e, start, goal, cost)
         return path, info
 
+    def _pad_route(self, route: list[str]) -> list[str]:
+        """CityFlow silently refuses to insert (or re-route) a vehicle whose
+        route is a single road - verified experimentally: push_vehicle and
+        set_vehicle_route both no-op on a 1-road route.  A plan is one road
+        long whenever the ambulance's depot already *is* the target road, so
+        append one successor road in that case."""
+        if not route or len(route) >= 2:
+            return route
+        succ = [v for v, _ in self.net.successors(route[0])]
+        if not succ:
+            return route
+        return [route[0], succ[0]]
+
     def _apply_route(self, amb: Ambulance, route: list[str]) -> None:
+        route = self._pad_route(route)
         amb.route = route
         amb.pending = False
         if amb.cityflow_id and amb.cityflow_id in self.eng.get_vehicles():
@@ -529,6 +558,9 @@ class SimSession:
             amb.eta_s = eta
             amb.error = None
             amb.last_road = path[0] if path else amb.depot_road
+            amb.watch_road = acc.road
+            amb.saw_watch = False
+            amb.passed_target = False
             self._apply_route(amb, path)
             acc.ambulance = amb.id
             acc.status = "assigned"
@@ -593,6 +625,21 @@ class SimSession:
                 # the engine removed it: it reached the end of its route
                 amb.cityflow_id = None
 
+            # CityFlow reports `distance` relative to whatever drivable the
+            # vehicle is on, so inside an intersection the number resets and a
+            # pure distance threshold can be missed.  Track whether the
+            # ambulance has actually driven off the road it was aiming at:
+            # leaving it means it passed the point it was aiming for.
+            if (
+                amb.watch_road
+                and amb.status in ("to-accident", "to-hospital")
+                and not amb.pending
+            ):
+                if info and info["road"] == amb.watch_road:
+                    amb.saw_watch = True
+                elif amb.saw_watch and (info is not None or amb.cityflow_id is None):
+                    amb.passed_target = True
+
             if amb.status == "to-accident":
                 acc = self.accidents.get(amb.accident_id or "")
                 if acc is None:
@@ -605,6 +652,8 @@ class SimSession:
                     elif amb.spawned and not amb.pending and amb.cityflow_id is None:
                         # engine removed it: it finished the route on that road
                         arrived = True
+                if amb.passed_target:
+                    arrived = True
                 if arrived:
                     amb.arrived_t = t
                     amb.status = "loading"
@@ -648,6 +697,9 @@ class SimSession:
                     acc.pickup_t = t
                     amb.pickup_done_t = t
                     amb.status = "to-hospital"
+                    amb.watch_road = hosp["road"]
+                    amb.saw_watch = False
+                    amb.passed_target = False
                     amb.fallback = amb.fallback or bool(info.get("fallback"))
                     amb.eta_s = path_time(path, self._cost())
                     self._apply_route(amb, path)
@@ -660,7 +712,7 @@ class SimSession:
                 hosp = next((h for h in self.hospitals if h["id"] == amb.hospital_id), None)
                 if hosp is None or acc is None:
                     continue
-                road = self._road_at(hosp["x"], hosp["y"])
+                road = hosp.get("road") or self._road_at(hosp["x"], hosp["y"])
                 road_len = self.net.roads[road].length if road in self.net.roads else 0.0
                 done = False
                 if amb.last_road == road:
@@ -670,6 +722,8 @@ class SimSession:
                         done = d >= max(0.0, road_len - 25.0)
                     elif amb.spawned and not amb.pending and amb.cityflow_id is None:
                         done = True
+                if amb.passed_target:
+                    done = True
                 if done:
                     amb.hospital_t = t
                     amb.status = "completed"

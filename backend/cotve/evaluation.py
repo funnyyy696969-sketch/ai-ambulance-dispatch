@@ -9,6 +9,7 @@ is what the table shows.
 
 from __future__ import annotations
 
+import math
 import statistics
 import time
 import uuid
@@ -30,6 +31,7 @@ def run_mission(
     pickup_s: float = 45.0,
     max_steps: int = 5000,
     sample_every: int = 50,
+    warmup: int = 1200,
 ) -> dict:
     """Run one complete emergency mission with a single planner."""
     workdir = f"/tmp/cotve-eval-{uuid.uuid4().hex[:8]}"
@@ -44,6 +46,12 @@ def run_mission(
     route2: list[str] = []
     samples: list[dict] = []
     t0 = time.time()
+
+    # let the background traffic reach a realistic steady state first, so the
+    # three planners are compared under actual congestion instead of an empty
+    # network (every method gets the identical warm-up)
+    for _ in range(max(0, warmup)):
+        session.step(1)
 
     disp = session.dispatch(acc["accident"]["id"], ambulance_id=ambulance_id, method=method)
     if not disp.get("ok"):
@@ -136,29 +144,104 @@ def run_mission(
     }
 
 
+METRIC_KEYS = [
+    "responseTime",
+    "hospitalTravelTime",
+    "totalEmergencyTime",
+    "routeDistance",
+    "avgWaitingTime",
+    "congestion",
+    "avgSpeed",
+    "routingEfficiency",
+]
+
+
+def accident_points(params: dict) -> list[tuple[float, float]]:
+    """On-road test points, farthest from the middle of the grid first.
+
+    Depots and hospitals are placed near the centre, so a centre accident
+    collapses into a one-road hop that every planner solves identically - the
+    far points give the three methods something real to disagree about.
+    """
+    rows = int(params.get("rows", 4))
+    cols = int(params.get("cols", 4))
+    spacing = float(params.get("spacing", 300.0))
+    cx = (cols - 1) * spacing / 2.0
+    cy = (rows - 1) * spacing / 2.0
+    pts: list[tuple[float, float]] = []
+    for r in range(rows):
+        for c in range(cols - 1):
+            pts.append(((c + 0.5) * spacing, r * spacing))  # on a horizontal road
+    for c in range(cols):
+        for r in range(rows - 1):
+            pts.append((c * spacing, (r + 0.5) * spacing))  # on a vertical road
+    pts.sort(key=lambda p: -math.hypot(p[0] - cx, p[1] - cy))
+    return pts
+
+
 def run_comparison(
     params: dict | None = None,
     accident_xy: tuple[float, float] | None = None,
     methods: tuple[str, ...] = METHODS,
+    runs: int = 1,
     **kwargs,
 ) -> dict:
-    """Run every method on an identical scenario and return a comparable table."""
-    params = params or dict(rows=4, cols=4, spacing=300.0, seed=7, demand=1.0,
-                            n_ambulances=2, n_hospitals=2, origin=(12.9716, 77.5946))
-    if accident_xy is None:
-        rows, cols, spacing = params.get("rows", 4), params.get("cols", 4), params.get("spacing", 300.0)
-        accident_xy = ((cols // 2) * spacing, (rows // 2) * spacing)
+    """Run every method on identical scenario(s) and return a comparable table.
+
+    With ``runs > 1`` the same set of accident locations is replayed for each
+    method and the returned metrics are the mean over the runs that completed.
+    """
+    params = params or dict(rows=4, cols=4, spacing=300.0, seed=7, demand=0.75,
+                            lanes=2, n_ambulances=2, n_hospitals=2,
+                            origin=(12.9716, 77.5946))
+    points = accident_points(params)
+    runs = max(1, min(int(runs), len(points)))
+    scenarios: list[tuple[float, float]] = []
+    for i in range(runs):
+        if i == 0 and accident_xy is not None:
+            scenarios.append((float(accident_xy[0]), float(accident_xy[1])))
+        else:
+            scenarios.append(points[(i if accident_xy is None else i - 1) % len(points)])
     started = time.time()
     results = []
     for m in methods:
-        res = run_mission(m, params, accident_xy, **kwargs)
-        results.append(res)
+        per_run = [run_mission(m, params, xy, **kwargs) for xy in scenarios]
+        good = [r for r in per_run if r["ok"]]
+        agg: dict[str, float | None] = {}
+        for k in METRIC_KEYS:
+            vals = [r["metrics"][k] for r in good if r["metrics"].get(k) is not None]
+            agg[k] = round(statistics.mean(vals), 3) if vals else None
+        results.append(
+            {
+                "method": m,
+                "label": METHOD_LABEL.get(m, m),
+                "ok": bool(good),
+                "runs": len(per_run),
+                "runsOk": len(good),
+                "fallback": any(bool(r.get("fallback")) for r in per_run),
+                "error": None
+                if good
+                else next(
+                    (r.get("error") for r in per_run if r.get("error")),
+                    "mission did not finish",
+                ),
+                "metrics": agg,
+                "samples": per_run[0]["samples"],
+                "perRun": per_run,
+            }
+        )
     return {
         "ok": True,
         "scenario": {k: v for k, v in params.items() if k != "origin"},
-        "accident": list(accident_xy),
+        "accident": list(scenarios[0]),
+        "scenarios": [list(p) for p in scenarios],
         "results": results,
         "wallMs": int((time.time() - started) * 1000),
+        "methods": {
+            "dijkstra": "Dijkstra on static free-flow road cost - no knowledge of live traffic",
+            "astar": "A* on the live CityFlow cost with an admissible straight-line heuristic",
+            "ppo": "GNN embeddings of the live network + PPO policy reshaping every link's cost",
+        },
         "definitions": {
             "responseTime": "dispatch -> ambulance reaches the accident (sim seconds)",
             "hospitalTravelTime": "patient loaded -> ambulance reaches the hospital (sim seconds)",
@@ -167,6 +250,6 @@ def run_comparison(
             "avgWaitingTime": "mean per-vehicle stopped time during the mission (seconds)",
             "congestion": "mean network occupancy (vehicles / lane capacity)",
             "avgSpeed": "mean vehicle speed during the mission (m/s)",
-            "routingEfficiency": "free-flow time of the offline-optimal path / free-flow time of the chosen path (1.0 = optimal)",
+            "routingEfficiency": "free-flow time of the offline-optimal path / free-flow time of the path actually chosen (1.0 = no detour). Dijkstra on free-flow scores 1.0 by construction - read it next to responseTime, which shows what ignoring live traffic costs",
         },
     }

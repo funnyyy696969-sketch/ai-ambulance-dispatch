@@ -1,216 +1,216 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import { Pause, Play, FastForward, Siren } from "lucide-react";
+import { MonitorX, Siren, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import MapPicker from "@/components/cotve/MapPicker";
-import DispatchPanel from "@/components/cotve/DispatchPanel";
-import DashboardPanel from "@/components/cotve/DashboardPanel";
-import SimViewAmbulance from "@/components/cotve/SimViewAmbulance";
-import SimViewSignals from "@/components/cotve/SimViewSignals";
-import { getController } from "@/lib/cotve/simulation";
-import { routePolyline } from "@/lib/cotve/network";
-import { toLatLng } from "@/lib/cotve/geo";
-import { useSimStore } from "@/lib/cotve/store";
-
-/** Drives the shared SimulationController from requestAnimationFrame and
- * syncs a UI snapshot into the store at 4 Hz. One loop, one simulation —
- * both 3D screens read the same state. */
-function useSimulationLoop() {
-  const raf = useRef(0);
-  useEffect(() => {
-    const ctrl = getController();
-    let last = performance.now();
-    let accum = 0;
-    let lastRoute: unknown = null;
-    const loop = (now: number) => {
-      const dt = Math.min(0.1, (now - last) / 1000);
-      last = now;
-      ctrl.tick(dt);
-      accum += dt;
-      if (accum >= 0.25) {
-        accum = 0;
-        const st = useSimStore.getState();
-        if (ctrl.currentRoute !== lastRoute) {
-          lastRoute = ctrl.currentRoute;
-          // route polyline from the SAME edge geometry used for routing,
-          // movement and 3D rendering (map/sim consistency)
-          const pts: [number, number][] = ctrl.currentRoute && ctrl.projection
-            ? routePolyline(ctrl.graph, ctrl.currentRoute.edgeIds).map((p) => {
-                const ll = toLatLng(ctrl.projection, p.x, p.y);
-                return [ll.lat, ll.lng] as [number, number];
-              })
-            : [];
-          st.set({
-            routeLatLngs: pts,
-            patientAccessLatLng: ctrl.patientAccessXY() && ctrl.projection
-              ? (() => { const p = ctrl.patientAccessXY()!; const ll = toLatLng(ctrl.projection, p.x, p.y); return [ll.lat, ll.lng] as [number, number]; })()
-              : null,
-            hospitalAccessLatLng: ctrl.hospitalAccessXY() && ctrl.projection
-              ? (() => { const p = ctrl.hospitalAccessXY()!; const ll = toLatLng(ctrl.projection, p.x, p.y); return [ll.lat, ll.lng] as [number, number]; })()
-              : null,
-          });
-        }
-        st.set({ status: ctrl.status(), metrics: ctrl.metrics, events: [...ctrl.events] });
-      }
-      raf.current = requestAnimationFrame(loop);
-    };
-    raf.current = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf.current);
-  }, []);
-}
+import CityFlowMap from "@/components/cotve/flow/CityFlowMap";
+import ComparisonPanel from "@/components/cotve/flow/ComparisonPanel";
+import ControlPanel from "@/components/cotve/flow/ControlPanel";
+import MiniMap from "@/components/cotve/flow/MiniMap";
+import SidePanel from "@/components/cotve/flow/SidePanel";
+import BrowserSim from "@/components/cotve/BrowserSim";
+import { api, BACKEND_URL, clockTime, startBackend, useFlowStore } from "@/lib/cotve/backend";
 
 export default function Dispatch() {
-  useSimulationLoop();
-  const status = useSimStore((s) => s.status);
-  const setStore = useSimStore((s) => s.set);
-  const running = !getController().paused && status?.phase !== "complete";
-  const ctrl = getController();
-  const phase = status?.phase ?? "idle";
-  const speedKmh = (ctrl.live.ambulance?.speed ?? 0) * 3.6;
+  const transport = useFlowStore((s) => s.transport);
+  const frame = useFlowStore((s) => s.frame);
+  const scenario = useFlowStore((s) => s.scenario);
+  const actionError = useFlowStore((s) => s.actionError);
+  const setStore = useFlowStore((s) => s.set);
 
-  // bottom status panel values (single simulation state, 4 Hz sync)
-  const distPatient =
-    phase === "pickup" ? "0 m · at patient"
-    : phase === "to-patient" && status?.remainM != null ? `${status.remainM.toFixed(0)} m`
-    : phase === "to-hospital" || phase === "complete" ? "picked up"
-    : "—";
-  const distHospital =
-    phase === "to-hospital" && status?.remainM != null ? `${status.remainM.toFixed(0)} m`
-    : phase === "complete" ? "0 m · arrived"
-    : "—";
-  const pickupState =
-    phase === "pickup" ? "loading patient…"
-    : phase === "to-hospital" || phase === "complete" ? "completed"
-    : phase === "idle" ? "—" : "waiting";
-  const priorityActive =
-    !!status && status.priorityStatus.startsWith("EMERGENCY");
+  const [mode, setMode] = useState<"console" | "browser">("console");
+  const [placeMode, setPlaceMode] = useState(false);
+  const [severity, setSeverity] = useState("major");
+  const [emergency, setEmergency] = useState("trauma");
+  const [autoDispatch, setAutoDispatch] = useState(true);
+
+  useEffect(() => startBackend(), []);
+
+  const offline = transport === "offline";
+
+  const handlePick = async (lat: number, lng: number) => {
+    if (!placeMode) return;
+    try {
+      const res = await api.addAccident({ lat, lng, severity, emergency });
+      if (!res.ok || !res.accident) {
+        setStore({ actionError: res.error ?? "accident could not be placed" });
+        return;
+      }
+      if (autoDispatch) {
+        const d = await api.dispatch(res.accident.id, undefined, "ppo");
+        if (!d.ok) setStore({ actionError: d.error ?? "dispatch failed" });
+      }
+    } catch (err) {
+      setStore({ actionError: (err as Error).message });
+    }
+  };
+
+  if (mode === "browser") {
+    return <BrowserSim onExit={() => setMode("console")} />;
+  }
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
-      {/* top bar */}
-      <header className="flex items-center gap-3 border-b border-border px-4 py-2.5">
-        <Link to="/" className="flex items-center gap-2 font-bold tracking-tight">
-          <Siren className="h-5 w-5 text-red-500" />
-          CoTV-E <span className="hidden text-xs font-normal text-muted-foreground sm:inline">Emergency Dispatch Console</span>
-        </Link>
-        <div className="ml-auto flex items-center gap-2">
-          <span className="hidden font-mono text-xs text-muted-foreground md:inline">
-            t = {(status?.t ?? 0).toFixed(1)}s · {status?.networkSource === "osm" ? "OSM network" : status?.networkSource === "demo-grid" ? "DEMO grid network" : "no network"}
-          </span>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              getController().paused = !getController().paused;
-              setStore({});
-            }}
-            disabled={!status || status.phase === "idle" || status.phase === "complete"}
-          >
-            {running ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-            {running ? "Pause" : "Resume"}
-          </Button>
-          {[1, 2, 4].map((m) => (
-            <Button
-              key={m}
-              size="sm"
-              variant={getController().speedMult === m ? "default" : "outline"}
-              onClick={() => {
-                getController().speedMult = m;
-                setStore({});
-              }}
-              className="px-2"
+    <div className="min-h-screen bg-gray-900 text-gray-100">
+      {/* ---------------- top navigation ---------------- */}
+      <header className="sticky top-0 z-50 border-b border-gray-700 bg-gray-800/95 backdrop-blur">
+        <div className="mx-auto flex max-w-[1800px] flex-wrap items-center gap-x-5 gap-y-1 px-4 py-2.5">
+          <Link to="/" className="flex items-center gap-2 text-sm font-bold tracking-tight text-white">
+            <Siren className="h-5 w-5 text-red-500" />
+            CityFlow
+            <span className="text-xs font-normal text-gray-400">| Traffic Simulation Platform</span>
+          </Link>
+          <nav className="ml-2 hidden items-center gap-4 text-xs text-gray-300 md:flex">
+            <a className="hover:text-white" href="#simulation">
+              Simulation
+            </a>
+            <a className="hover:text-white" href="#comparison">
+              Comparison
+            </a>
+            <button className="hover:text-white" onClick={() => setMode("browser")}>
+              Browser sim
+            </button>
+            <a className="hover:text-white" href="#help">
+              Help
+            </a>
+          </nav>
+
+          <div className="ml-auto flex items-center gap-3 font-mono text-xs text-gray-400">
+            <span className="hidden sm:inline">Time: {clockTime(frame?.sim.time ?? 0)}</span>
+            <span className="hidden sm:inline">
+              Step: {frame?.sim.step ?? 0} / 3600
+            </span>
+            <span
+              className={`rounded px-2 py-0.5 ${
+                offline
+                  ? "bg-red-500/15 text-red-300"
+                  : transport === "connecting"
+                    ? "bg-amber-500/15 text-amber-300"
+                    : "bg-emerald-500/15 text-emerald-300"
+              }`}
             >
-              <FastForward className="h-3.5 w-3.5" />
-              {m}×
+              {offline ? "backend offline" : transport === "connecting" ? "connecting…" : `backend ${transport}`}
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 border-gray-600 bg-transparent text-xs text-gray-200 hover:bg-gray-700"
+              onClick={() => setMode("browser")}
+            >
+              <MonitorX className="mr-1.5 h-3.5 w-3.5" />
+              Offline mode
             </Button>
-          ))}
+          </div>
         </div>
       </header>
 
-      <main className="grid flex-1 grid-cols-1 gap-3 p-3 xl:grid-cols-[400px_1fr]">
-        {/* left: map + dispatch + dashboard */}
-        <div className="flex min-h-0 flex-col gap-3">
-          <div className="h-[320px] shrink-0">
-            <MapPicker />
+      {/* ---------------- simulation stage ---------------- */}
+      <main
+        id="simulation"
+        className="mx-auto grid max-w-[1800px] grid-cols-1 gap-3 p-3 xl:grid-cols-[1fr_340px]"
+      >
+        <div className="relative h-[calc(100vh-160px)] min-h-[540px] overflow-hidden rounded-xl border border-gray-700 bg-[#0b1120]">
+          <CityFlowMap placeMode={placeMode} onPick={handlePick} />
+
+          <div className="absolute left-3 top-3 z-[1000]">
+            <ControlPanel
+              placeMode={placeMode}
+              setPlaceMode={setPlaceMode}
+              severity={severity}
+              setSeverity={setSeverity}
+              emergency={emergency}
+              setEmergency={setEmergency}
+              autoDispatch={autoDispatch}
+              setAutoDispatch={setAutoDispatch}
+            />
           </div>
-          <DispatchPanel />
-          <div className="min-h-[380px] flex-1 xl:min-h-0">
-            <DashboardPanel />
+
+          <div className="absolute bottom-3 right-3 z-[1000]">
+            <MiniMap />
           </div>
+
+          {!scenario && (
+            <div className="absolute inset-0 z-[900] flex items-center justify-center bg-gray-900/70">
+              <div className="max-w-md rounded-lg border border-gray-700 bg-gray-800 px-5 py-4 text-center text-sm text-gray-300">
+                {offline ? (
+                  <>
+                    <p className="mb-2 font-semibold text-red-300">CityFlow backend not reachable</p>
+                    <p className="mb-3 text-xs leading-relaxed text-gray-400">
+                      Start it with <code className="text-gray-200">cd backend && python -m cotve.server</code>{" "}
+                      (see Help below), or work in offline mode.
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="border-gray-600 bg-transparent text-xs"
+                      onClick={() => setMode("browser")}
+                    >
+                      Open browser simulation
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <p className="mb-1 font-semibold text-emerald-300">Connecting to CityFlow…</p>
+                    <p className="text-xs text-gray-400">Loading the road network and engine state.</p>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {actionError && (
+            <div className="absolute left-1/2 top-3 z-[1100] flex max-w-[520px] -translate-x-1/2 items-center gap-2 rounded-lg border border-red-500/50 bg-red-950/90 px-3 py-2 text-xs text-red-200 shadow-lg">
+              <span className="min-w-0 break-words">{actionError}</span>
+              <button
+                className="ml-1 shrink-0 text-red-300 hover:text-white"
+                onClick={() => setStore({ actionError: null })}
+                aria-label="dismiss"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* right: dual synchronized 3D screens */}
-        <div className="grid min-h-0 grid-cols-1 gap-3 lg:grid-rows-2">
-          <div className="min-h-[300px]">
-            <SimViewAmbulance />
-          </div>
-          <div className="min-h-[300px]">
-            <SimViewSignals />
-          </div>
-        </div>
+        <aside className="h-[620px] xl:h-[calc(100vh-160px)]">
+          <SidePanel />
+        </aside>
       </main>
 
-      {/* bottom status panel: live emergency-response readout.
-           sticky so it is ALWAYS visible on any window size (it used to sit
-           below the fold and clip chips on smaller screens). */}
-      <footer className="sticky bottom-0 z-20 border-t border-border bg-card px-3 py-2 shadow-[0_-4px_12px_rgba(0,0,0,0.06)] sm:px-4">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs sm:gap-x-5">
-          <StatusChip label="Status" value={status?.ambulanceStatus ?? "standby"} strong accent="text-red-600" />
-          <StatusChip label="Speed" value={`${speedKmh.toFixed(0)} km/h`} mono />
-          <StatusChip label="To patient" value={distPatient} mono />
-          <StatusChip
-            label="ETA patient"
-            value={status?.etaPatient != null ? `${status.etaPatient.toFixed(0)} s` : "—"}
-            mono
-          />
-          <StatusChip label="Pickup" value={pickupState} />
-          <StatusChip label="To hospital" value={distHospital} mono />
-          <StatusChip
-            label="ETA hospital"
-            value={status?.etaHospital != null ? `${status.etaHospital.toFixed(0)} s` : "—"}
-            mono
-          />
-          <StatusChip
-            label="Route"
-            value={status ? `${status.routingMode} · ${status.progressPct.toFixed(0)}%` : "—"}
-            mono
-          />
-          <StatusChip
-            label="Signal priority"
-            value={status?.priorityStatus ?? "—"}
-            accent={priorityActive ? "text-red-600 font-semibold" : undefined}
-          />
-          <StatusChip
-            label="Roads blocked"
-            value={`${status?.blockedRoads ?? 0} · ${status?.reroutes ?? 0} reroutes`}
-            mono
-          />
-        </div>
-      </footer>
-    </div>
-  );
-}
+      {/* ---------------- planner comparison ---------------- */}
+      <section id="comparison" className="mx-auto max-w-[1800px] px-3 pb-6">
+        <ComparisonPanel />
+      </section>
 
-function StatusChip({
-  label,
-  value,
-  strong,
-  mono,
-  accent,
-}: {
-  label: string;
-  value: string;
-  strong?: boolean;
-  mono?: boolean;
-  accent?: string;
-}) {
-  return (
-    <span className="flex max-w-full items-baseline gap-1.5">
-      <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">{label}</span>
-      {/* long values wrap inside the chip instead of overflowing the bar */}
-      <span className={`${mono ? "font-mono" : ""} ${strong ? "font-semibold" : ""} ${accent ?? "text-foreground"} min-w-0 break-words`}>
-        {value}
-      </span>
-    </span>
+      {/* ---------------- help ---------------- */}
+      <section id="help" className="mx-auto max-w-[1800px] px-3 pb-10">
+        <div className="rounded-xl border border-gray-700 bg-gray-800/95 p-4 text-xs leading-relaxed text-gray-400">
+          <h2 className="mb-2 text-sm font-semibold text-gray-200">Running the platform</h2>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <h3 className="mb-1 font-semibold text-gray-300">1 · Python backend (CityFlow)</h3>
+              <pre className="overflow-x-auto rounded bg-gray-900/70 p-2 font-mono text-[11px] text-gray-300">
+{`cd backend
+python -m venv .venv
+.venv\\Scripts\\activate        # Windows
+pip install -r requirements.txt
+python -m cotve.server         # http://127.0.0.1:8000`}
+              </pre>
+            </div>
+            <div>
+              <h3 className="mb-1 font-semibold text-gray-300">2 · This dashboard</h3>
+              <pre className="overflow-x-auto rounded bg-gray-900/70 p-2 font-mono text-[11px] text-gray-300">
+{`bun install
+bun run dev                   # http://localhost:5173`}
+              </pre>
+              <p className="mt-2">
+                The dashboard streams engine frames over WebSocket (<code className="text-gray-300">/ws</code>)
+                and falls back to REST polling when sockets are blocked. Backend URL defaults to{" "}
+                <code className="text-gray-300">{BACKEND_URL}</code> and can be overridden with{" "}
+                <code className="text-gray-300">VITE_COTVE_BACKEND</code>.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
